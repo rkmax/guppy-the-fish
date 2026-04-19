@@ -208,6 +208,11 @@ const FISH_TICK_MS = 40;
 const FISH_SLEEP_Z_OFFSET_PX = 24;
 const FISH_BUBBLE_OFFSET_PX = 18;
 const FISH_BUBBLE_JITTER_PX = 10;
+const FISH_CRUISE_Y_PERCENT = 42;
+const FISH_FOOD_Y_PERCENT = 28;
+const FISH_SLEEP_Y_PERCENT = 60;
+const FISH_VERTICAL_SPEED_PERCENT_PER_SEC = 18;
+const FISH_SLEEP_SETTLE_THRESHOLD = 0.6;
 const AUTONOMY_ACTION_INTERVAL_MS = 16000;
 const AUTONOMY_MODE_DURATION_MS = 7000;
 const SWIM_SPEED_MULTIPLIER = 1.45;
@@ -221,6 +226,11 @@ const AUTONOMY_IDLE_PROMPTS = [
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function moveToward(current, target, maxDelta) {
+  if (Math.abs(target - current) <= maxDelta) return target;
+  return current + Math.sign(target - current) * maxDelta;
 }
 
 function getFishBounds(tankWidth) {
@@ -700,10 +710,12 @@ function App() {
 
   // Fish physics
   const [fishX, setFishX]   = useState(0);
+  const [fishY, setFishY]   = useState(FISH_CRUISE_Y_PERCENT);
   const [fishDir, setFishDir] = useState(1);
   const [frame, setFrame]   = useState(0);
   const fishDirRef = useRef(1);
   const fishXRef = useRef(0);
+  const fishYRef = useRef(FISH_CRUISE_Y_PERCENT);
   const fishDRef = useRef(1);
   const tankRef = useRef(null);
   const [tankWidth, setTankWidth] = useState(0);
@@ -713,6 +725,7 @@ function App() {
   const [sleeping, setSleeping] = useState(false);
   const [eating, setEating]     = useState(false);
   const sleepingRef = useRef(false);
+  const sleepPendingRef = useRef(false);
   const [lightsOff, setLightsOff] = useState(false);
   const lightsOffRef = useRef(false);
   const [behaviorMode, setBehaviorMode] = useState('idle');
@@ -835,11 +848,32 @@ function App() {
 
     let lastTick = performance.now();
     const id = setInterval(() => {
-      if (sleepingRef.current) return;
-
       const now = performance.now();
       const deltaSeconds = Math.min((now - lastTick) / 1000, 0.08);
       lastTick = now;
+
+      const nextTargetY = getFishTargetY();
+      const nextY = moveToward(
+        fishYRef.current,
+        nextTargetY,
+        FISH_VERTICAL_SPEED_PERCENT_PER_SEC * deltaSeconds,
+      );
+
+      if (nextY !== fishYRef.current) {
+        fishYRef.current = nextY;
+        setFishY(current => current === nextY ? current : nextY);
+      }
+
+      if (
+        sleepPendingRef.current
+        && !sleepingRef.current
+        && Math.abs(nextY - FISH_SLEEP_Y_PERCENT) <= FISH_SLEEP_SETTLE_THRESHOLD
+      ) {
+        setSleepingState(true);
+        return;
+      }
+
+      if (sleepingRef.current || sleepPendingRef.current) return;
 
       setFishX(x => {
         const bounds = getFishBounds(tankWidthRef.current);
@@ -996,8 +1030,29 @@ function App() {
     sleepingRef.current = nextSleeping;
     setSleeping(nextSleeping);
     if (nextSleeping) {
+      sleepPendingRef.current = false;
+    }
+    if (nextSleeping) {
       setTimedBehaviorMode('idle');
     }
+  }
+
+  function requestSleep() {
+    sleepPendingRef.current = true;
+    setTimedBehaviorMode('idle');
+  }
+
+  function wakeFish() {
+    sleepPendingRef.current = false;
+    if (sleepingRef.current) {
+      setSleepingState(false);
+    }
+  }
+
+  function getFishTargetY() {
+    if (sleepPendingRef.current || sleepingRef.current) return FISH_SLEEP_Y_PERCENT;
+    if (behaviorModeRef.current === 'food') return FISH_FOOD_Y_PERCENT;
+    return FISH_CRUISE_Y_PERCENT;
   }
 
   function setLightsOffState(nextLightsOff) {
@@ -1022,15 +1077,15 @@ function App() {
     let channel = 'ambient';
 
     if (plannedAction === 'sleep') {
-      setSleepingState(true);
+      requestSleep();
       eventText = 'guppy decided to sleep';
       channel = 'event';
     } else if (plannedAction === 'wake') {
-      setSleepingState(false);
+      wakeFish();
       eventText = 'guppy woke up';
       channel = 'event';
     } else if (plannedAction === 'swim') {
-      if (sleepingRef.current) setSleepingState(false);
+      wakeFish();
       setTimedBehaviorMode('swim', AUTONOMY_MODE_DURATION_MS);
       updateNeeds(current => ({
         ...current,
@@ -1040,7 +1095,7 @@ function App() {
       eventText = 'guppy started swimming laps';
       channel = 'event';
     } else if (plannedAction === 'food') {
-      if (sleepingRef.current) setSleepingState(false);
+      wakeFish();
       setTimedBehaviorMode('food', AUTONOMY_MODE_DURATION_MS);
       updateNeeds(current => ({
         ...current,
@@ -1076,7 +1131,7 @@ function App() {
     if (busyRef.current) return;
     setBusyState(true);
     try {
-      setSleepingState(false);
+      wakeFish();
       setTimedBehaviorMode('food', 3600);
       const newNeeds = updateNeeds(current => ({
         ...current,
@@ -1098,7 +1153,7 @@ function App() {
     if (busyRef.current) return;
     setBusyState(true);
     try {
-      setSleepingState(false);
+      wakeFish();
       const newNeeds = updateNeeds(current => ({
         ...current,
         happiness: clamp(current.happiness + 28, 0, 100),
@@ -1119,8 +1174,8 @@ function App() {
     try {
       const nextLightsOff = !lightsOffRef.current;
       setLightsOffState(nextLightsOff);
-      if (!nextLightsOff && sleepingRef.current) {
-        setSleepingState(false);
+      if (!nextLightsOff && (sleepingRef.current || sleepPendingRef.current)) {
+        wakeFish();
       }
       const trigger = nextLightsOff ? 'the light just turned off' : 'the light just came back on';
       const eventText = nextLightsOff ? 'lights off' : 'lights on';
@@ -1160,8 +1215,6 @@ function App() {
     : eating
       ? (fishDir > 0 ? FISH_EAT_R  : FISH_EAT_L)
       : (fishDir > 0 ? FR[frame]   : FL[frame]);
-
-  const fishY = sleeping ? 60 : behaviorMode === 'food' ? 28 : 42;
 
   const ph  = tw.phosphorColor;
   const bg  = tw.bgColor;
