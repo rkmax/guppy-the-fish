@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GUPPY.EXE</title>
+  <link rel="icon" href="data:,">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
   <!-- ONNX Runtime Web (runs GuppyLM locally via WebAssembly) -->
@@ -249,11 +250,40 @@ const FISH_EAT_L = [
 //  Falls back to template responses while model loads
 // ─────────────────────────────────────────────────────────
 
+const FISH_INITIAL_X_RATIO = 0.4;
+const FISH_MIN_X_RATIO = 0.06;
+const FISH_MAX_X_RATIO = 0.82;
+const FISH_SPEED_PX_PER_SEC = 60;
+const FISH_TICK_MS = 40;
+const FISH_SLEEP_Z_OFFSET_PX = 24;
+const FISH_BUBBLE_OFFSET_PX = 18;
+const FISH_BUBBLE_JITTER_PX = 10;
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function getFishBounds(tankWidth) {
+  if (!tankWidth) return { min: 0, max: 0 };
+  return {
+    min: tankWidth * FISH_MIN_X_RATIO,
+    max: tankWidth * FISH_MAX_X_RATIO,
+  };
+}
+
 async function guppyReply(userText, needs) {
   const engine = window.guppyEngine;
   if (engine && engine.ready) {
-    const result = await engine.generate(userText, { maxTokens: 45, temperature: 0.85 });
-    if (result) return result;
+    try {
+      const result = await engine.generate([{ role: 'user', content: userText }], {
+        maxTokens: 32,
+        temperature: 0.7,
+        topK: 50,
+      });
+      if (result) return result;
+    } catch (err) {
+      console.error('[GuppyUI] reply generation failed:', err);
+    }
   }
   return window.templateResponse(userText, needs);
 }
@@ -272,8 +302,15 @@ async function guppyAutoThought(needs) {
   }
 
   if (engine && engine.ready) {
-    const result = await engine.generate(prompt, { maxTokens: 40, temperature: 0.9 });
-    if (result) return result;
+    try {
+      const result = await engine.generate(
+        [{ role: 'user', content: prompt }],
+        { maxTokens: 32, temperature: 0.7, topK: 50 },
+      );
+      if (result) return result;
+    } catch (err) {
+      console.error('[GuppyUI] auto-thought generation failed:', err);
+    }
   }
   return window.templateResponse(prompt, needs);
 }
@@ -324,7 +361,7 @@ function BinaryRain({ color, enabled }) {
 // ─────────────────────────────────────────────────────────
 //  TANK
 // ─────────────────────────────────────────────────────────
-function Tank({ tw, fishX, fishY, fishAscii, bubbles, weedPhase, sleeping, guppySpeech, bgColor }) {
+function Tank({ tw, fishX, tankWidth, fishY, fishAscii, bubbles, weedPhase, sleeping, guppySpeech, bgColor }) {
   const ph = tw.phosphorColor;
   const dim = (a = 0.15) => ph.replace(')', `, ${a})`).replace('rgb', 'rgba').replace('#', 'rgba(').replace(/rgba\(([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2}), ([0-9.]+)\)/, (_, r,g,b,a) => `rgba(${parseInt(r,16)},${parseInt(g,16)},${parseInt(b,16)},${a})`);
 
@@ -344,6 +381,9 @@ function Tank({ tw, fishX, fishY, fishAscii, bubbles, weedPhase, sleeping, guppy
     const s = Math.sin(p + wi * 1.1 + hi * 0.25);
     return s > 0.6 ? '(' : s < -0.6 ? ')' : '|';
   };
+
+  const safeFishX = Number.isFinite(fishX) ? fishX : 0;
+  const speechLeft = tankWidth ? clamp(safeFishX, tankWidth * 0.18, tankWidth * 0.72) : safeFishX;
 
   return (
     <div style={{ width:'100%', height:'100%', position:'relative', background: bgColor, overflow:'hidden' }}>
@@ -371,7 +411,7 @@ function Tank({ tw, fishX, fishY, fishAscii, bubbles, weedPhase, sleeping, guppy
       {/* Bubbles */}
       {bubbles.map(b => (
         <div key={b.id} style={{
-          position:'absolute', left:`${b.x}%`, top:`${b.y}%`,
+          position:'absolute', left:`${b.x}px`, top:`${b.y}%`,
           color: dimPh(0.15 + (1 - b.y/60)*0.25),
           fontSize:12, fontFamily:'monospace',
           transform:`translateX(${Math.sin(b.y * 0.25 + b.id) * 10}px)`,
@@ -420,7 +460,7 @@ function Tank({ tw, fishX, fishY, fishAscii, bubbles, weedPhase, sleeping, guppy
       {/* Fish */}
       <div style={{
         position:'absolute',
-        left:`${fishX}%`, top:`${fishY}%`,
+        left:`${safeFishX}px`, top:`${fishY}%`,
         transform:'translate(-50%, -50%)',
         fontFamily:'monospace', fontSize: tw.fishSize,
         color: sleeping ? dimPh(0.35) : ph,
@@ -434,7 +474,7 @@ function Tank({ tw, fishX, fishY, fishAscii, bubbles, weedPhase, sleeping, guppy
       {sleeping && (
         <div style={{
           position:'absolute',
-          left:`${fishX + 3}%`, top:`${fishY - 10}%`,
+          left:`${safeFishX + FISH_SLEEP_Z_OFFSET_PX}px`, top:`${fishY - 10}%`,
           fontFamily:'monospace', fontSize:12,
           color: dimPh(0.5),
           animation:'zzzFloat 2s ease-out infinite',
@@ -446,7 +486,7 @@ function Tank({ tw, fishX, fishY, fishAscii, bubbles, weedPhase, sleeping, guppy
       {guppySpeech && (
         <div style={{
           position:'absolute',
-          left:`${Math.min(Math.max(fishX, 18), 72)}%`,
+          left:`${speechLeft}px`,
           top:`${Math.max(fishY - 24, 8)}%`,
           transform:'translateX(-50%)',
           background: bgColor,
@@ -569,10 +609,15 @@ function App() {
   }, []);
 
   // Fish physics
-  const [fishX, setFishX]   = useState(40);
+  const [fishX, setFishX]   = useState(0);
   const [fishDir, setFishDir] = useState(1);
   const [frame, setFrame]   = useState(0);
   const fishDirRef = useRef(1);
+  const fishXRef = useRef(0);
+  const fishDRef = useRef(1);
+  const tankRef = useRef(null);
+  const [tankWidth, setTankWidth] = useState(0);
+  const tankWidthRef = useRef(0);
 
   // States
   const [sleeping, setSleeping] = useState(false);
@@ -582,8 +627,6 @@ function App() {
   // Bubbles
   const [bubbles, setBubbles] = useState([]);
   const bubbleId = useRef(0);
-  const fishXRef = useRef(40);
-  const fishDRef = useRef(1);
 
   // Needs
   const [hunger,    setHunger]    = useState(72);
@@ -604,9 +647,41 @@ function App() {
   const speechTimerRef = useRef(null);
   const busyRef = useRef(false);
   const chatEndRef = useRef(null);
+  const messagesRef = useRef([]);
 
   // scroll chat
   useEffect(() => { chatEndRef.current?.scrollIntoView({ block:'nearest' }); }, [messages, thinking]);
+
+  useEffect(() => () => {
+    if (speechTimerRef.current) clearTimeout(speechTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    const node = tankRef.current;
+    if (!node) return;
+
+    const updateWidth = (nextWidth) => {
+      if (!Number.isFinite(nextWidth) || nextWidth <= 0) return;
+      setTankWidth(width => width === nextWidth ? width : nextWidth);
+    };
+
+    updateWidth(node.getBoundingClientRect().width);
+
+    if (typeof ResizeObserver === 'undefined') {
+      const handleResize = () => updateWidth(node.getBoundingClientRect().width);
+      window.addEventListener('resize', handleResize);
+      return () => window.removeEventListener('resize', handleResize);
+    }
+
+    const observer = new ResizeObserver(entries => {
+      const entry = entries[0];
+      const nextWidth = entry?.contentRect?.width ?? node.getBoundingClientRect().width;
+      updateWidth(nextWidth);
+    });
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
 
   // ── Boot GuppyLM engine on mount
   useEffect(() => {
@@ -621,29 +696,74 @@ function App() {
     });
   }, []);
 
+  useEffect(() => {
+    if (!tankWidth) return;
+
+    const previousWidth = tankWidthRef.current;
+    const bounds = getFishBounds(tankWidth);
+
+    setFishX(current => {
+      const next = previousWidth > 0
+        ? clamp(current * (tankWidth / previousWidth), bounds.min, bounds.max)
+        : clamp(tankWidth * FISH_INITIAL_X_RATIO, bounds.min, bounds.max);
+
+      fishXRef.current = next;
+      return next;
+    });
+
+    tankWidthRef.current = tankWidth;
+  }, [tankWidth]);
+
   // ── Generate greeting on mount
   useEffect(() => {
     (async () => {
       const greeting = await guppyAutoThought({ hunger: 72, happiness: 85, energy: 90 });
       showSpeech(greeting);
-      setMessages([{ from:'guppy', text: greeting }]);
+      const initialMessages = greeting
+        ? [{ from:'guppy', text: greeting, channel:'ambient' }]
+        : [];
+      messagesRef.current = initialMessages;
+      setMessages(initialMessages);
     })();
   }, []);
 
   // ── Fish movement
   useEffect(() => {
+    if (!tankWidth) return;
+
+    let lastTick = performance.now();
     const id = setInterval(() => {
       if (sleepingRef.current) return;
+
+      const now = performance.now();
+      const deltaSeconds = Math.min((now - lastTick) / 1000, 0.08);
+      lastTick = now;
+
       setFishX(x => {
-        let nx = x + fishDirRef.current * 0.7;
-        if (nx > 82) { fishDirRef.current = -1; setFishDir(-1); nx = 82; }
-        if (nx < 6)  { fishDirRef.current =  1; setFishDir(1);  nx = 6; }
+        const bounds = getFishBounds(tankWidthRef.current);
+        let nx = x + fishDirRef.current * FISH_SPEED_PX_PER_SEC * deltaSeconds;
+
+        if (nx > bounds.max) {
+          fishDirRef.current = -1;
+          fishDRef.current = -1;
+          setFishDir(-1);
+          nx = bounds.max;
+        }
+
+        if (nx < bounds.min) {
+          fishDirRef.current = 1;
+          fishDRef.current = 1;
+          setFishDir(1);
+          nx = bounds.min;
+        }
+
         fishXRef.current = nx;
         return nx;
       });
-    }, 55);
+    }, FISH_TICK_MS);
+
     return () => clearInterval(id);
-  }, []);
+  }, [tankWidth]);
 
   // ── Frame tick
   useEffect(() => {
@@ -664,7 +784,9 @@ function App() {
       const bid = bubbleId.current++;
       setBubbles(b => [...b.slice(-25), {
         id: bid,
-        x: fishXRef.current + (fishDRef.current > 0 ? 1.5 : -1.5) + (Math.random()*3-1.5),
+        x: fishXRef.current
+          + (fishDRef.current > 0 ? FISH_BUBBLE_OFFSET_PX : -FISH_BUBBLE_OFFSET_PX)
+          + (Math.random() * FISH_BUBBLE_JITTER_PX - FISH_BUBBLE_JITTER_PX / 2),
         y: 55,
         char: ['o','°','·','O','.'][Math.floor(Math.random()*5)],
         speed: 0.25 + Math.random() * 0.35,
@@ -699,15 +821,26 @@ function App() {
     const id = setInterval(async () => {
       if (busyRef.current || sleepingRef.current) return;
       busyRef.current = true;
-      const thought = await guppyAutoThought(needsRef.current);
-      showSpeech(thought);
-      setMessages(m => [...m, { from:'guppy', text: thought }]);
-      busyRef.current = false;
+      try {
+        const thought = await guppyAutoThought(needsRef.current);
+        showSpeech(thought);
+        pushMessage({ from:'guppy', text: thought, channel:'ambient' });
+      } finally {
+        busyRef.current = false;
+      }
     }, 20000);
     return () => clearInterval(id);
   }, []);
 
+  function pushMessage(message) {
+    const next = [...messagesRef.current, message];
+    messagesRef.current = next;
+    setMessages(next);
+    return next;
+  }
+
   function showSpeech(text) {
+    if (!text) return;
     setSpeech(text);
     if (speechTimerRef.current) clearTimeout(speechTimerRef.current);
     speechTimerRef.current = setTimeout(() => setSpeech(''), 7000);
@@ -720,21 +853,31 @@ function App() {
     setTimeout(() => setEating(false), 2200);
     if (busyRef.current) return;
     busyRef.current = true;
-    const newNeeds = { ...needsRef.current, hunger: Math.min(100, needsRef.current.hunger + 38) };
-    const msg = await guppyReply('you dropped food in the water', newNeeds);
-    showSpeech(msg);
-    setMessages(m => [...m, { from:'guppy', text: msg }]);
-    busyRef.current = false;
+    try {
+      const trigger = 'you dropped food in the water';
+      const newNeeds = { ...needsRef.current, hunger: Math.min(100, needsRef.current.hunger + 38) };
+      pushMessage({ from:'tank', text: trigger, channel:'event' });
+      const msg = await guppyReply(trigger, newNeeds);
+      showSpeech(msg);
+      pushMessage({ from:'guppy', text: msg, channel:'event' });
+    } finally {
+      busyRef.current = false;
+    }
   }
 
   async function tap() {
     setHappiness(hp => Math.min(100, hp + 28));
     if (busyRef.current) return;
     busyRef.current = true;
-    const msg = await guppyReply('you tapped on the glass', needsRef.current);
-    showSpeech(msg);
-    setMessages(m => [...m, { from:'guppy', text: msg }]);
-    busyRef.current = false;
+    try {
+      const trigger = 'you tapped on the glass';
+      pushMessage({ from:'tank', text: trigger, channel:'event' });
+      const msg = await guppyReply(trigger, needsRef.current);
+      showSpeech(msg);
+      pushMessage({ from:'guppy', text: msg, channel:'event' });
+    } finally {
+      busyRef.current = false;
+    }
   }
 
   async function toggleLight() {
@@ -743,26 +886,34 @@ function App() {
     setSleeping(!wasAsleep);
     if (busyRef.current) return;
     busyRef.current = true;
-    const trigger = wasAsleep ? 'the light just came back on' : 'the light just turned off';
-    const msg = await guppyReply(trigger, needsRef.current);
-    showSpeech(msg);
-    setMessages(m => [...m, { from:'guppy', text: msg }]);
-    busyRef.current = false;
+    try {
+      const trigger = wasAsleep ? 'the light just came back on' : 'the light just turned off';
+      const eventText = wasAsleep ? 'lights on' : 'lights off';
+      pushMessage({ from:'tank', text: eventText, channel:'event' });
+      const msg = await guppyReply(trigger, needsRef.current);
+      showSpeech(msg);
+      pushMessage({ from:'guppy', text: msg, channel:'event' });
+    } finally {
+      busyRef.current = false;
+    }
   }
 
   async function send() {
     const text = input.trim();
     if (!text || thinking || busyRef.current) return;
     setInput('');
-    setMessages(m => [...m, { from:'human', text }]);
+    pushMessage({ from:'human', text, channel:'chat' });
     setThinking(true);
     busyRef.current = true;
-    const reply = await guppyReply(text, needsRef.current);
-    showSpeech(reply);
-    setMessages(m => [...m, { from:'guppy', text: reply }]);
-    setHappiness(hp => Math.min(100, hp + 4));
-    setThinking(false);
-    busyRef.current = false;
+    try {
+      const reply = await guppyReply(text, needsRef.current);
+      showSpeech(reply);
+      pushMessage({ from:'guppy', text: reply, channel:'chat' });
+      setHappiness(hp => Math.min(100, hp + 4));
+    } finally {
+      setThinking(false);
+      busyRef.current = false;
+    }
   }
 
   // ── Compose fish ASCII
@@ -779,6 +930,38 @@ function App() {
   const dim = (a) => rgba(ph, a);
 
   const needsLow = hunger < 30 || happiness < 30 || energy < 25;
+
+  const messageStyle = (message) => {
+    if (message.channel === 'ambient') {
+      return {
+        label: 'drift> ',
+        labelColor: dim(0.38),
+        textColor: dim(0.8),
+      };
+    }
+
+    if (message.from === 'tank') {
+      return {
+        label: 'tank>  ',
+        labelColor: rgba('#ffb000', 0.55),
+        textColor: '#ffb000',
+      };
+    }
+
+    if (message.from === 'guppy') {
+      return {
+        label: 'guppy> ',
+        labelColor: dim(0.4),
+        textColor: ph,
+      };
+    }
+
+    return {
+      label: 'you>   ',
+      labelColor: rgba('#6ec6ff', 0.5),
+      textColor: '#6ec6ff',
+    };
+  };
 
   return (
     <div style={{
@@ -814,10 +997,12 @@ function App() {
       <div style={{ flex:1, display:'flex', overflow:'hidden', minHeight:0 }}>
 
         {/* Tank */}
-        <div style={{ flex:1, position:'relative', overflow:'hidden', borderRight:`1px solid ${dim(0.15)}` }}>
+        <div ref={tankRef} style={{ flex:1, position:'relative', overflow:'hidden', borderRight:`1px solid ${dim(0.15)}` }}>
           <Tank
             tw={tw}
-            fishX={fishX} fishY={fishY}
+            fishX={fishX}
+            tankWidth={tankWidth}
+            fishY={fishY}
             fishAscii={fishAscii}
             bubbles={bubbles}
             weedPhase={weedPhase}
@@ -907,10 +1092,10 @@ function App() {
             <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column', gap:5 }}>
               {messages.slice(-30).map((m, i) => (
                 <div key={i} style={{ fontSize:11, lineHeight:1.4, wordBreak:'break-word' }}>
-                  <span style={{ color: m.from === 'guppy' ? dim(0.4) : rgba('#6ec6ff', 0.5) }}>
-                    {m.from === 'guppy' ? 'guppy> ' : 'you>   '}
+                  <span style={{ color: messageStyle(m).labelColor }}>
+                    {messageStyle(m).label}
                   </span>
-                  <span style={{ color: m.from === 'guppy' ? ph : '#6ec6ff' }}>{m.text}</span>
+                  <span style={{ color: messageStyle(m).textColor }}>{m.text}</span>
                 </div>
               ))}
               {thinking && (
