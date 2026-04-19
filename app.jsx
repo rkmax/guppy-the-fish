@@ -1,4 +1,4 @@
-const { useState, useEffect, useRef } = React;
+const { useState, useEffect, useLayoutEffect, useRef } = React;
 
 const TWEAK_DEFAULTS = window.TWEAK_DEFAULTS || {
   phosphorColor: '#39ff14',
@@ -9,191 +9,124 @@ const TWEAK_DEFAULTS = window.TWEAK_DEFAULTS || {
 };
 
 // ─────────────────────────────────────────────────────────
-//  ASCII FISH FRAMES  (detailed 11-line betta/guppy)
+//  ASCII FISH FRAMES  (cartoon sprite bank)
 // ─────────────────────────────────────────────────────────
-//  RIGHT: tail fan LEFT  →→  head RIGHT   ( °  )>
-//  LEFT:  tail fan RIGHT →→  head LEFT   <( °  )
-//  Hand-authored both directions — no runtime mirroring
+//  RIGHT: tail LEFT  →→  head RIGHT
+//  LEFT:  tail RIGHT →→  head LEFT
 
-// RIGHT-FACING — 4 frames, tail animation
-const FR = [
-  // Frame 0 — neutral
-  [
-    "  \\",
-    "   \\            /\\",
-    "    \\           | \\",
-    "     \\         /   \\",
-    "      \\       /     )",
-    "       \\     ( °   )>",
-    "       //     \\____/",
-    "      //        | \\",
-    "     //         |  \\",
-    "    //",
-    "   //",
-  ],
-  // Frame 1 — tail sweeps up
-  [
-    " \\",
-    "  \\             /\\",
-    "   \\            | \\",
-    "    \\          /   \\",
-    "     \\        /     )",
-    "      \\      ( °   )>",
-    "      //      \\____/",
-    "     //         | \\",
-    "    //          |  \\",
-    "   //",
-    "  //",
-  ],
-  // Frame 2 — neutral + wake ripple
-  [
-    "  \\",
-    "   \\            /\\",
-    "    \\           | \\",
-    "     \\         /   \\",
-    "      \\       /     )",
-    "       \\     ( °   )>~~",
-    "       //     \\____/",
-    "      //        | \\",
-    "     //         |  \\",
-    "    //",
-    "   //",
-  ],
-  // Frame 3 — tail sweeps down
-  [
-    "  \\",
-    "   \\            /\\",
-    "    \\           | \\",
-    "     \\         /   \\",
-    "      \\       /     )",
-    "       \\     ( °   )>",
-    "       //     \\____/",
-    "      ///       | \\",
-    "     ///        |  \\",
-    "    ///",
-    "   ///",
-  ],
-].map(lines => lines.join('\n'));
+const ASCII_MIRROR_MAP = Object.freeze({
+  '/': '\\',
+  '\\': '/',
+  '(': ')',
+  ')': '(',
+  '<': '>',
+  '>': '<',
+  '[': ']',
+  ']': '[',
+  '{': '}',
+  '}': '{',
+});
 
-// LEFT-FACING — hand-authored (head LEFT, tail fan RIGHT)
-const FL = [
-  // Frame 0 — neutral
-  [
-    "              //",
-    "   /\\         //",
-    "  /  \\       //",
-    " /    \\     //",
-    "(      \\   //",
-    "<( °    ) //",
-    " \\____/ \\\\",
-    "  /  |   \\\\",
-    " /   |    \\\\",
-    "          \\\\",
-    "           \\\\",
-  ],
-  // Frame 1 — tail sweeps up
-  [
-    "             //",
-    "            //",
-    "   /\\      //",
-    "  /  \\    //",
-    " (    \\  //",
-    "<( °   )//",
-    " \\____/\\\\",
-    "  /  | \\\\",
-    " /   |  \\\\",
-    "         \\\\",
-    "          \\\\",
-  ],
-  // Frame 2 — neutral + wake ripple
-  [
-    "              //",
-    "   /\\         //",
-    "  /  \\       //",
-    " /    \\     //",
-    "(      \\   //",
-    "~~<( °  ) //",
-    "  \\____/ \\\\",
-    "   /  |   \\\\",
-    "  /   |    \\\\",
-    "           \\\\",
-    "            \\\\",
-  ],
-  // Frame 3 — tail sweeps down
-  [
-    "              //",
-    "   /\\         //",
-    "  /  \\       //",
-    " /    \\     //",
-    "(      \\   //",
-    "<( °    ) //",
-    " \\____/ \\\\",
-    "  /  |  ///",
-    " /   |  ///",
-    "        ///",
-    "         ///",
-  ],
-].map(lines => lines.join('\n'));
+function mirrorAsciiLines(lines) {
+  return lines.map((line) => [...line]
+    .reverse()
+    .map((char) => ASCII_MIRROR_MAP[char] || char)
+    .join(''));
+}
 
-// Sleep — right-facing
-const FISH_SLEEP_R = [
-  "  \\",
-  "   \\            /\\",
-  "    \\           | \\",
-  "     \\         /   \\",
-  "      \\       /     )",
-  "       \\     ( -   )>",
-  "       //     \\____/",
-  "      //",
-  "     //   z z z",
-  "    //  z",
-  "   //",
-].join('\n');
+function normalizeAsciiFrames(frames) {
+  const height = Math.max(...frames.map((frame) => frame.length));
+  const width = Math.max(
+    ...frames.flatMap((frame) => frame.map((line) => line.length)),
+  );
 
-// Sleep — left-facing
-const FISH_SLEEP_L = [
-  "              //",
-  "   /\\         //",
-  "  /  \\       //",
-  " /    \\     //",
-  "(      \\   //",
-  "<( -    ) //",
-  " \\____/ \\\\",
-  "          \\\\",
-  "  z z z   \\\\",
-  "      z    \\\\",
-  "            \\\\",
-].join('\n');
+  return frames.map((frame) => Array.from({ length: height }, (_, index) => (
+    (frame[index] || '').padEnd(width, ' ')
+  )));
+}
 
-// Eat — right-facing
-const FISH_EAT_R = [
-  "  \\          *",
-  "   \\            /\\",
-  "    \\           | \\",
-  "     \\         /   \\",
-  "      \\       /     ) *",
-  "       \\     ( °   )> o",
-  "       //     \\____/",
-  "      //        | \\",
-  "     //    *    |  \\",
-  "    //",
-  "   //",
-].join('\n');
+function buildSpriteFrames(frames) {
+  return normalizeAsciiFrames(frames).map((lines) => lines.join('\n'));
+}
 
-// Eat — left-facing
-const FISH_EAT_L = [
-  " *            //",
-  "   /\\         //",
-  "  /  \\       //",
-  " /    \\     //",
-  "(      \\   //",
-  " o <( °  )//",
-  "   \\____/\\\\",
-  "    /  |  \\\\",
-  " * /   |   \\\\",
-  "           \\\\",
-  "            \\\\",
-].join('\n');
+function createMirroredSpriteSet(rightFrames) {
+  return {
+    right: buildSpriteFrames(rightFrames),
+    left: buildSpriteFrames(rightFrames.map((frame) => mirrorAsciiLines(frame))),
+  };
+}
+
+const FISH_SPRITES = {
+  swim: createMirroredSpriteSet([
+    [
+      "  \\",
+      "   \\          /\\",
+      "    \\      __/  \\__",
+      "     \\   _/  _    \\",
+      "      \\/  _/ )  o   >",
+      "      /\\\\_/__/    _/",
+      "     //      \\__./",
+      "    //         v",
+    ],
+    [
+      " \\",
+      "  \\           /\\",
+      "   \\       __/  \\__",
+      "    \\    _/  _    \\",
+      "     \\__/ _/ )  o   >",
+      "     //  \\__/    _/",
+      "    //       \\__./",
+      "   //          v",
+    ],
+    [
+      "  \\",
+      "   \\          /\\",
+      "    \\      __/  \\__",
+      "     \\   _/  _    \\",
+      "      \\/__/ )  o   >",
+      "      ///   /    _/",
+      "     ///    \\__./",
+      "    //         v",
+    ],
+  ]),
+  sleep: createMirroredSpriteSet([
+    [
+      "  \\",
+      "   \\            /\\",
+      "    \\         _/  \\",
+      "     \\      _/   _\\",
+      "      \\    /  __   )",
+      "       \\  (  - _  )>",
+      "       //  \\______/ ",
+      "      //",
+      "     //    z z z",
+      "    //   z",
+      "   //",
+    ],
+  ]),
+  eat: createMirroredSpriteSet([
+    [
+      "  \\          *",
+      "   \\            /\\",
+      "    \\         _/  \\",
+      "     \\      _/   _\\",
+      "      \\    /  __   ) *",
+      "       \\  (  o _  )> o",
+      "       //  \\______/ ",
+      "      //      |  \\",
+      "     //   *   |   \\",
+      "    //",
+      "   //",
+    ],
+  ]),
+};
+
+function getFishFrameSet(state) {
+  // Always render the canonical right-facing ASCII and mirror at paint time.
+  // Geometric mirroring preserves anatomy better than rebuilding left-facing
+  // sprites from reversed characters.
+  return FISH_SPRITES[state].right;
+}
 
 // ─────────────────────────────────────────────────────────
 //  GUPPY SOUL  — local GuppyLM inference (ONNX + WASM)
@@ -419,13 +352,13 @@ async function guppyAutoThought(needs, context = {}, seedPrompt = '') {
 // ─────────────────────────────────────────────────────────
 function BinaryRain({ color, enabled }) {
   const [cols, setCols] = useState(() =>
-    Array.from({ length: 14 }, (_, i) => ({
+    Array.from({ length: 10 }, (_, i) => ({
       id: i,
-      x: 3 + i * 6.8,
+      x: 6 + i * 8.4,
       y: Math.random() * 100,
-      str: Array.from({ length: 7 }, () => Math.random() > 0.5 ? '1' : '0').join('\n'),
-      speed: 0.08 + Math.random() * 0.14,
-      opacity: 0.025 + Math.random() * 0.06,
+      str: Array.from({ length: 6 }, () => Math.random() > 0.5 ? '1' : '0').join('\n'),
+      speed: 0.05 + Math.random() * 0.07,
+      opacity: 0.01 + Math.random() * 0.024,
     }))
   );
 
@@ -436,7 +369,7 @@ function BinaryRain({ color, enabled }) {
         ...col,
         y: col.y > 100 ? -15 : col.y + col.speed,
         str: Math.random() < 0.06
-          ? Array.from({ length: 7 }, () => Math.random() > 0.5 ? '1' : '0').join('\n')
+          ? Array.from({ length: 6 }, () => Math.random() > 0.5 ? '1' : '0').join('\n')
           : col.str,
       })));
     }, 120);
@@ -457,6 +390,211 @@ function BinaryRain({ color, enabled }) {
   );
 }
 
+const FLOOR_FONT_SIZE_PX = 13;
+const FLOOR_FONT_FAMILY = "'Share Tech Mono', 'Courier New', monospace";
+const FLOOR_PADDING_PX = 12;
+const FLOOR_PROBE_CHARS = 100;
+
+function useMeasuredMonospaceCharWidth(fontSizePx, fontFamily) {
+  const probeRef = useRef(null);
+  const [charWidthPx, setCharWidthPx] = useState(0);
+
+  useLayoutEffect(() => {
+    const probe = probeRef.current;
+    if (!probe) return;
+
+    const measure = () => {
+      const rect = probe.getBoundingClientRect();
+      const next = rect.width / FLOOR_PROBE_CHARS;
+      if (Number.isFinite(next) && next > 0) {
+        setCharWidthPx((prev) => (Math.abs(prev - next) < 0.05 ? prev : next));
+      }
+    };
+
+    measure();
+
+    let disposed = false;
+    const onResize = () => measure();
+    window.addEventListener('resize', onResize);
+    window.visualViewport?.addEventListener('resize', onResize);
+
+    const fontReady = document.fonts?.ready;
+    if (fontReady?.then) {
+      fontReady.then(() => {
+        if (!disposed) measure();
+      });
+    }
+
+    let observer;
+    if (typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(() => measure());
+      observer.observe(probe);
+    }
+
+    return () => {
+      disposed = true;
+      window.removeEventListener('resize', onResize);
+      window.visualViewport?.removeEventListener('resize', onResize);
+      observer?.disconnect();
+    };
+  }, [fontFamily, fontSizePx]);
+
+  return [probeRef, charWidthPx];
+}
+
+function SurfaceRibbon({ weedPhase, color, tankWidth }) {
+  const [probeRef, charWidthPx] = useMeasuredMonospaceCharWidth(FLOOR_FONT_SIZE_PX, FLOOR_FONT_FAMILY);
+  const usableWidth = Math.max(0, tankWidth * 0.96);
+  const cols = tankWidth > 0 && charWidthPx > 0
+    ? Math.max(32, Math.floor(usableWidth / charWidthPx))
+    : 64;
+  const pattern = ['~', '≈', '~', '~', '-', '≈', '~'];
+  const ribbon = Array.from({ length: cols }, (_, index) => (
+    pattern[(index + Math.floor(weedPhase * 1.5)) % pattern.length]
+  )).join('');
+
+  return (
+    <pre style={{
+      position:'absolute',
+      top:'5%',
+      left:'2%',
+      right:'2%',
+      margin:0,
+      fontFamily:FLOOR_FONT_FAMILY,
+      fontSize:FLOOR_FONT_SIZE_PX,
+      lineHeight:'13px',
+      color,
+      overflow:'hidden',
+      whiteSpace:'pre',
+      pointerEvents:'none',
+      zIndex:2,
+    }}>
+      <span
+        ref={probeRef}
+        aria-hidden="true"
+        style={{
+          position:'absolute',
+          top:0,
+          left:0,
+          visibility:'hidden',
+          pointerEvents:'none',
+          whiteSpace:'pre',
+        }}
+      >{'0'.repeat(FLOOR_PROBE_CHARS)}</span>
+      {ribbon}
+    </pre>
+  );
+}
+
+function FloorScape({ weedPhase, color, tankWidth }) {
+  const [probeRef, charWidthPx] = useMeasuredMonospaceCharWidth(FLOOR_FONT_SIZE_PX, FLOOR_FONT_FAMILY);
+
+  const usableWidth = Math.max(0, tankWidth - FLOOR_PADDING_PX);
+  const COLS = tankWidth > 0 && charWidthPx > 0
+    ? Math.max(40, Math.floor(usableWidth / charWidthPx))
+    : 80;
+  const ROWS = 10;
+  const grid = Array.from({ length: ROWS }, () => new Array(COLS).fill(' '));
+
+  const writeText = (row, col, text) => {
+    if (row < 0 || row >= ROWS) return;
+    [...text].forEach((char, index) => {
+      const x = col + index;
+      if (char === ' ' || x < 0 || x >= COLS) return;
+      grid[row][x] = char;
+    });
+  };
+
+  const gravelPattern = "._,.__.,_,._.__,,._";
+  for (let col = 0; col < COLS; col++) {
+    grid[ROWS - 1][col] = gravelPattern[(col + Math.floor(weedPhase * 1.4)) % gravelPattern.length];
+    if (col % 3 === 0) {
+      grid[ROWS - 2][col] = col % 11 === 0 ? '_' : '.';
+    }
+  }
+
+  const plantClusters = [
+    { baseRatio: 0.1, stems: [0, 1, -1], height: 5, sway: 1.5 },
+    { baseRatio: 0.23, stems: [0, 1], height: 4, sway: 1.2 },
+    { baseRatio: 0.76, stems: [0, 1, -1, 2], height: 5, sway: 1.6 },
+    { baseRatio: 0.9, stems: [0, -1], height: 4, sway: 1.1 },
+  ];
+
+  plantClusters.forEach((cluster, clusterIndex) => {
+    const baseCol = Math.round((COLS - 1) * cluster.baseRatio);
+    cluster.stems.forEach((stemOffset, stemIndex) => {
+      for (let heightIndex = 0; heightIndex < cluster.height; heightIndex++) {
+        const row = ROWS - 2 - heightIndex;
+        const drift = Math.sin(
+          weedPhase + clusterIndex * 1.35 + stemIndex * 0.72 + heightIndex * 0.34,
+        );
+        const sway = Math.round(drift * (cluster.sway + heightIndex * 0.12));
+        const col = Math.max(0, Math.min(COLS - 1, baseCol + stemOffset + sway));
+        const isTip = heightIndex === cluster.height - 1;
+        const char = isTip
+          ? drift > 0.45 ? '\'' : drift < -0.45 ? '`' : '|'
+          : drift > 0.58 ? '/' : drift < -0.58 ? '\\' : '|';
+        grid[row][col] = char;
+      }
+    });
+  });
+
+  const placeCentered = (row, centerRatio, text) => {
+    const centerCol = Math.round((COLS - 1) * centerRatio);
+    const startCol = centerCol - Math.floor(text.length / 2);
+    writeText(row, startCol, text);
+  };
+
+  [
+    { row: ROWS - 4, ratio: 0.09, text: "   __   " },
+    { row: ROWS - 3, ratio: 0.09, text: " _/  \\_ " },
+    { row: ROWS - 2, ratio: 0.09, text: "/______\\" },
+    { row: ROWS - 3, ratio: 0.5, text: "  ____  " },
+    { row: ROWS - 2, ratio: 0.5, text: " /____\\ " },
+    { row: ROWS - 4, ratio: 0.8, text: "    ___   " },
+    { row: ROWS - 3, ratio: 0.8, text: " __/   \\_ " },
+    { row: ROWS - 2, ratio: 0.8, text: "/________\\" },
+    { row: ROWS - 3, ratio: 0.64, text: "(_)" },
+    { row: ROWS - 2, ratio: 0.69, text: "o" },
+    { row: ROWS - 2, ratio: 0.72, text: "." },
+  ].forEach(({ row, ratio, text }) => placeCentered(row, ratio, text));
+
+  return (
+    <pre style={{
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: '2%',
+      fontFamily: FLOOR_FONT_FAMILY,
+      fontSize: FLOOR_FONT_SIZE_PX,
+      lineHeight: '13px',
+      color,
+      pointerEvents: 'none',
+      zIndex: 3,
+      margin: 0,
+      padding: `0 ${FLOOR_PADDING_PX / 2}px`,
+      width: '100%',
+      boxSizing: 'border-box',
+      whiteSpace: 'pre',
+      overflow: 'visible',
+    }}>
+      <span
+        ref={probeRef}
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          visibility: 'hidden',
+          pointerEvents: 'none',
+          whiteSpace: 'pre',
+        }}
+      >{'0'.repeat(FLOOR_PROBE_CHARS)}</span>
+      {grid.map((row) => row.join('')).join('\n')}
+    </pre>
+  );
+}
+
 // ─────────────────────────────────────────────────────────
 //  TANK
 // ─────────────────────────────────────────────────────────
@@ -466,6 +604,7 @@ function Tank({
   tankWidth,
   fishY,
   fishPose,
+  fishMirrorX,
   fishAscii,
   bubbles,
   foodPellets,
@@ -487,14 +626,6 @@ function Tank({
     return `rgba(${r},${g},${b},${alpha})`;
   };
   const dimPh = (a) => hexToDimRgba(ph, a);
-
-  const weedPositions = [8, 18, 28, 72, 83, 91];
-  const weedHeights   = [4,  3,  5,  4,  5,  3];
-
-  const weedChar = (p, wi, hi) => {
-    const s = Math.sin(p + wi * 1.1 + hi * 0.25);
-    return s > 0.6 ? '(' : s < -0.6 ? ')' : '|';
-  };
 
   const safeFishX = Number.isFinite(fishX) ? fishX : 0;
   const speechLeft = tankWidth ? clamp(safeFishX, tankWidth * 0.18, tankWidth * 0.72) : safeFishX;
@@ -530,7 +661,7 @@ function Tank({
       )}
 
       {/* Binary rain */}
-      <BinaryRain color={ph} enabled={tw.binaryRain} />
+      <BinaryRain color={dimPh(lightsOff ? 0.1 : 0.18)} enabled={tw.binaryRain} />
 
       {/* Light dim */}
       <div style={{
@@ -571,13 +702,11 @@ function Tank({
       )}
 
       {/* Surface shimmer */}
-      <div style={{
-        position:'absolute', top:'5%', left:'2%', right:'2%',
-        color: dimPh(0.25), fontSize:13, letterSpacing:2, fontFamily:'monospace',
-        overflow:'hidden', whiteSpace:'nowrap', pointerEvents:'none',
-      }}>
-        {Array.from({length:60},(_,i) => ['~','≈','~','~','-','≈','~'][( i + Math.floor(weedPhase*1.5) ) % 7]).join('')}
-      </div>
+      <SurfaceRibbon
+        weedPhase={weedPhase}
+        color={dimPh(0.25)}
+        tankWidth={tankWidth}
+      />
 
       {/* Food pellets */}
       {foodPellets.map((pellet) => (
@@ -651,54 +780,23 @@ function Tank({
         );
       })}
 
-      {/* Seaweed — single 2D ASCII grid, one <pre> block */}
-      {(() => {
-        const COLS = 88, ROWS = 8;
-        const grid = Array.from({ length: ROWS }, () => new Array(COLS).fill(' '));
-        weedPositions.forEach((wx, wi) => {
-          const baseCol = Math.round(wx * COLS / 100);
-          for (let hi = 0; hi < weedHeights[wi]; hi++) {
-            const row = ROWS - 1 - hi;
-            const sway = Math.round(Math.sin(weedPhase + wi * 1.3 + hi * 0.25) * 1.5);
-            const col = Math.max(0, Math.min(COLS - 1, baseCol + sway));
-            if (row >= 0) grid[row][col] = weedChar(weedPhase, wi, hi);
-          }
-        });
-        const gridStr = grid.map(r => r.join('')).join('\n');
-        return (
-          <pre style={{
-            position: 'absolute',
-            bottom: '8%', left: 0, right: 0,
-            fontFamily: 'monospace', fontSize: 13, lineHeight: '13px',
-            color: dimPh(0.3),
-            pointerEvents: 'none', zIndex: 3,
-            margin: 0, padding: '0 4px',
-            whiteSpace: 'pre', overflow: 'visible',
-          }}>{gridStr}</pre>
-        );
-      })()}
+      {/* Lower hardscape */}
+      <FloorScape
+        weedPhase={weedPhase}
+        color={dimPh(lightsOff ? 0.16 : 0.27)}
+        tankWidth={tankWidth}
+      />
 
       <div style={{
         position:'absolute',
         left:0,
         right:0,
-        bottom:'8%',
-        height:'12%',
-        background:`linear-gradient(180deg, transparent 0%, ${dimPh(lightsOff ? 0.03 : 0.07)} 100%)`,
+        bottom:0,
+        height:'20%',
+        background:`linear-gradient(180deg, transparent 0%, ${dimPh(lightsOff ? 0.025 : 0.055)} 58%, ${dimPh(lightsOff ? 0.05 : 0.08)} 100%)`,
         pointerEvents:'none',
         zIndex:3,
       }}/>
-
-      {/* Floor */}
-      <div style={{
-        position:'absolute', bottom:0, left:0, right:0, height:'8%',
-        background: dimPh(0.06),
-        fontFamily:'monospace', fontSize:12, color: dimPh(0.22),
-        overflow:'hidden', display:'flex', alignItems:'center', paddingLeft:6,
-        letterSpacing:1,
-      }}>
-        {'._,_._.,_.~_,._._,__._.~_,._._,.___._,__,_._,._._,._._,_.,_.,_.,.__._,_._._._._._._._._._._._._._._._._.'}
-      </div>
 
       {/* Fish */}
       <div style={{
@@ -708,17 +806,21 @@ function Tank({
           translate(-50%, -50%)
           translateY(${fishPose.bobPx}px)
           rotate(${fishPose.tiltDeg}deg)
-          scaleX(${fishPose.squashX})
           scaleY(${fishPose.squashY})
         `,
         transformOrigin:'50% 50%',
-        fontFamily:'monospace', fontSize: tw.fishSize,
-        color: sleeping ? dimPh(0.35) : ph,
-        whiteSpace:'pre', lineHeight:1.15,
-        textShadow: sleeping ? 'none' : `0 0 12px ${dimPh(0.5)}`,
-        transition:'color 1.5s, text-shadow 1.5s',
         zIndex:6, pointerEvents:'none',
-      }}>{fishAscii}</div>
+      }}>
+        <div style={{
+          transform:`scaleX(${fishMirrorX * fishPose.squashX})`,
+          transformOrigin:'50% 50%',
+          fontFamily:'monospace', fontSize: tw.fishSize,
+          color: sleeping ? dimPh(0.35) : ph,
+          whiteSpace:'pre', lineHeight:1.15,
+          textShadow: sleeping ? 'none' : `0 0 12px ${dimPh(0.5)}`,
+          transition:'color 1.5s, text-shadow 1.5s',
+        }}>{fishAscii}</div>
+      </div>
 
       {/* Sleep Zs */}
       {sleeping && (
@@ -915,6 +1017,7 @@ function App() {
   const [sleeping, setSleeping] = useState(false);
   const [eating, setEating]     = useState(false);
   const sleepingRef = useRef(false);
+  const eatingRef = useRef(false);
   const sleepPendingRef = useRef(false);
   const [lightsOff, setLightsOff] = useState(false);
   const lightsOffRef = useRef(false);
@@ -939,6 +1042,7 @@ function App() {
   useEffect(() => { needsRef.current = { hunger, happiness, energy }; }, [hunger, happiness, energy]);
   useEffect(() => { lightsOffRef.current = lightsOff; }, [lightsOff]);
   useEffect(() => { behaviorModeRef.current = behaviorMode; }, [behaviorMode]);
+  useEffect(() => { eatingRef.current = eating; }, [eating]);
 
   // Weed phase
   const [weedPhase, setWeedPhase] = useState(0);
@@ -1163,7 +1267,13 @@ function App() {
           : 1.5 + speedMultiplier * 1.6 + Math.min(Math.abs(verticalVelocity) / FISH_VERTICAL_SPEED_PERCENT_PER_SEC, 1) * 0.75
       ) * (turnWave > 0 ? 0.55 : 1);
 
-      const nextFrame = Math.floor(framePhaseRef.current) % 4;
+      const activeFishState = sleepingRef.current
+        ? 'sleep'
+        : eatingRef.current
+          ? 'eat'
+          : 'swim';
+      const activeFishDirection = fishDirRef.current > 0 ? 'right' : 'left';
+      const nextFrame = Math.floor(framePhaseRef.current) % getFishFrameSet(activeFishState).length;
       if (nextFrame !== frameRef.current) {
         frameRef.current = nextFrame;
         setFrame(nextFrame);
@@ -1540,11 +1650,10 @@ function App() {
   }
 
   // ── Compose fish ASCII
-  const fishAscii = sleeping
-    ? (fishDir > 0 ? FISH_SLEEP_R : FISH_SLEEP_L)
-    : eating
-      ? (fishDir > 0 ? FISH_EAT_R  : FISH_EAT_L)
-      : (fishDir > 0 ? FR[frame]   : FL[frame]);
+  const fishState = sleeping ? 'sleep' : eating ? 'eat' : 'swim';
+  const fishDirection = fishDir > 0 ? 'right' : 'left';
+  const fishFrames = getFishFrameSet(fishState);
+  const fishAscii = fishFrames[frame % fishFrames.length];
 
   const ph  = tw.phosphorColor;
   const bg  = tw.bgColor;
@@ -1625,6 +1734,7 @@ function App() {
             tankWidth={tankWidth}
             fishY={fishY}
             fishPose={fishPose}
+            fishMirrorX={fishDirection === 'right' ? 1 : -1}
             fishAscii={fishAscii}
             bubbles={bubbles}
             foodPellets={foodPellets}
