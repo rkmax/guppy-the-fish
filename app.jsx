@@ -11,189 +11,167 @@ const TWEAK_DEFAULTS = window.TWEAK_DEFAULTS || {
 // ─────────────────────────────────────────────────────────
 //  ASCII FISH FRAMES  (detailed 11-line betta/guppy)
 // ─────────────────────────────────────────────────────────
-//  RIGHT: tail fan LEFT  →→  head RIGHT   ( °  )>
-//  LEFT:  tail fan RIGHT →→  head LEFT   <( °  )
-//  Hand-authored both directions — no runtime mirroring
+//  RIGHT: tail fan LEFT  →→  head RIGHT   ( o )>
+//  LEFT:  tail fan RIGHT →→  head LEFT   <( o )
 
-// RIGHT-FACING — 4 frames, tail animation
-const FR = [
-  // Frame 0 — neutral
-  [
-    "  \\",
-    "   \\            /\\",
-    "    \\           | \\",
-    "     \\         /   \\",
-    "      \\       /     )",
-    "       \\     ( °   )>",
-    "       //     \\____/",
-    "      //        | \\",
-    "     //         |  \\",
-    "    //",
-    "   //",
-  ],
-  // Frame 1 — tail sweeps up
-  [
-    " \\",
-    "  \\             /\\",
-    "   \\            | \\",
-    "    \\          /   \\",
-    "     \\        /     )",
-    "      \\      ( °   )>",
-    "      //      \\____/",
-    "     //         | \\",
-    "    //          |  \\",
-    "   //",
-    "  //",
-  ],
-  // Frame 2 — neutral + wake ripple
-  [
-    "  \\",
-    "   \\            /\\",
-    "    \\           | \\",
-    "     \\         /   \\",
-    "      \\       /     )",
-    "       \\     ( °   )>~~",
-    "       //     \\____/",
-    "      //        | \\",
-    "     //         |  \\",
-    "    //",
-    "   //",
-  ],
-  // Frame 3 — tail sweeps down
-  [
-    "  \\",
-    "   \\            /\\",
-    "    \\           | \\",
-    "     \\         /   \\",
-    "      \\       /     )",
-    "       \\     ( °   )>",
-    "       //     \\____/",
-    "      ///       | \\",
-    "     ///        |  \\",
-    "    ///",
-    "   ///",
-  ],
-].map(lines => lines.join('\n'));
+const ASCII_MIRROR_MAP = Object.freeze({
+  '/': '\\',
+  '\\': '/',
+  '(': ')',
+  ')': '(',
+  '<': '>',
+  '>': '<',
+  '[': ']',
+  ']': '[',
+  '{': '}',
+  '}': '{',
+});
 
-// LEFT-FACING — hand-authored (head LEFT, tail fan RIGHT)
-const FL = [
-  // Frame 0 — neutral
-  [
-    "              //",
-    "   /\\         //",
-    "  /  \\       //",
-    " /    \\     //",
-    "(      \\   //",
-    "<( °    ) //",
-    " \\____/ \\\\",
-    "  /  |   \\\\",
-    " /   |    \\\\",
-    "          \\\\",
-    "           \\\\",
-  ],
-  // Frame 1 — tail sweeps up
-  [
-    "             //",
-    "            //",
-    "   /\\      //",
-    "  /  \\    //",
-    " (    \\  //",
-    "<( °   )//",
-    " \\____/\\\\",
-    "  /  | \\\\",
-    " /   |  \\\\",
-    "         \\\\",
-    "          \\\\",
-  ],
-  // Frame 2 — neutral + wake ripple
-  [
-    "              //",
-    "   /\\         //",
-    "  /  \\       //",
-    " /    \\     //",
-    "(      \\   //",
-    "~~<( °  ) //",
-    "  \\____/ \\\\",
-    "   /  |   \\\\",
-    "  /   |    \\\\",
-    "           \\\\",
-    "            \\\\",
-  ],
-  // Frame 3 — tail sweeps down
-  [
-    "              //",
-    "   /\\         //",
-    "  /  \\       //",
-    " /    \\     //",
-    "(      \\   //",
-    "<( °    ) //",
-    " \\____/ \\\\",
-    "  /  |  ///",
-    " /   |  ///",
-    "        ///",
-    "         ///",
-  ],
-].map(lines => lines.join('\n'));
+function mirrorAsciiLines(lines) {
+  return lines.map((line) => [...line]
+    .reverse()
+    .map((char) => ASCII_MIRROR_MAP[char] || char)
+    .join(''));
+}
 
-// Sleep — right-facing
-const FISH_SLEEP_R = [
-  "  \\",
-  "   \\            /\\",
-  "    \\           | \\",
-  "     \\         /   \\",
-  "      \\       /     )",
-  "       \\     ( -   )>",
-  "       //     \\____/",
-  "      //",
-  "     //   z z z",
-  "    //  z",
-  "   //",
-].join('\n');
+function normalizeAsciiFrames(frames) {
+  const height = Math.max(...frames.map((frame) => frame.length));
+  const width = Math.max(
+    ...frames.flatMap((frame) => frame.map((line) => line.length)),
+  );
 
-// Sleep — left-facing
-const FISH_SLEEP_L = [
-  "              //",
-  "   /\\         //",
-  "  /  \\       //",
-  " /    \\     //",
-  "(      \\   //",
-  "<( -    ) //",
-  " \\____/ \\\\",
-  "          \\\\",
-  "  z z z   \\\\",
-  "      z    \\\\",
-  "            \\\\",
-].join('\n');
+  return frames.map((frame) => Array.from({ length: height }, (_, index) => (
+    (frame[index] || '').padEnd(width, ' ')
+  )));
+}
 
-// Eat — right-facing
-const FISH_EAT_R = [
-  "  \\          *",
-  "   \\            /\\",
-  "    \\           | \\",
-  "     \\         /   \\",
-  "      \\       /     ) *",
-  "       \\     ( °   )> o",
-  "       //     \\____/",
-  "      //        | \\",
-  "     //    *    |  \\",
-  "    //",
-  "   //",
-].join('\n');
+function buildSpriteFrames(frames) {
+  return normalizeAsciiFrames(frames).map((lines) => lines.join('\n'));
+}
 
-// Eat — left-facing
-const FISH_EAT_L = [
-  " *            //",
-  "   /\\         //",
-  "  /  \\       //",
-  " /    \\     //",
-  "(      \\   //",
-  " o <( °  )//",
-  "   \\____/\\\\",
-  "    /  |  \\\\",
-  " * /   |   \\\\",
-  "           \\\\",
-  "            \\\\",
-].join('\n');
+function createMirroredSpriteSet(rightFrames) {
+  return {
+    right: buildSpriteFrames(rightFrames),
+    left: buildSpriteFrames(rightFrames.map((frame) => mirrorAsciiLines(frame))),
+  };
+}
+
+const FISH_SPRITES = {
+  swim: createMirroredSpriteSet([
+    [
+      "  \\",
+      "   \\            /\\",
+      "    \\         _/  \\",
+      "     \\      _/   _\\",
+      "      \\    /  __   )",
+      "       \\  (  o _  )>",
+      "       //  \\______/ ",
+      "      //      |  \\",
+      "     //       |   \\",
+      "    //",
+      "   //",
+    ],
+    [
+      " \\",
+      "  \\             /\\",
+      "   \\          _/  \\",
+      "    \\       _/   _\\",
+      "     \\     /  __   )",
+      "      \\   (  o _  )>",
+      "      //   \\______/ ",
+      "     //       |  \\",
+      "    //        |   \\",
+      "   //",
+      "  //",
+    ],
+    [
+      "  \\",
+      "   \\            /\\",
+      "    \\         _/  \\",
+      "     \\      _/   _\\",
+      "      \\    /  __   )",
+      "       \\  (  o _  )>",
+      "      //\\  \\______/ ",
+      "     //\\\\     |  \\",
+      "    //       |   \\",
+      "   //",
+      "  //",
+    ],
+    [
+      "  \\",
+      "   \\            /\\",
+      "    \\         _/  \\",
+      "     \\      _/   _\\",
+      "      \\    /  __   )",
+      "       \\  (  o _  )>~~",
+      "       //  \\______/ ",
+      "      //      |  \\",
+      "     //       |   \\",
+      "    //",
+      "   //",
+    ],
+    [
+      "  \\",
+      "   \\            /\\",
+      "    \\         _/  \\",
+      "     \\      _/   _\\",
+      "      \\    /  __   )",
+      "       \\  (  o _  )>",
+      "       //  \\______/ ",
+      "      ///     |  \\",
+      "     ///      |   \\",
+      "    ///",
+      "   //",
+    ],
+    [
+      "  \\",
+      "   \\            /\\",
+      "    \\         _/  \\",
+      "     \\      _/   _\\",
+      "      \\    /  __   )",
+      "       \\  (  o _  )>",
+      "       //  \\______/ ",
+      "      ///     |  \\",
+      "     ////     |   \\",
+      "    ////",
+      "   ////",
+    ],
+  ]),
+  sleep: createMirroredSpriteSet([
+    [
+      "  \\",
+      "   \\            /\\",
+      "    \\         _/  \\",
+      "     \\      _/   _\\",
+      "      \\    /  __   )",
+      "       \\  (  - _  )>",
+      "       //  \\______/ ",
+      "      //",
+      "     //    z z z",
+      "    //   z",
+      "   //",
+    ],
+  ]),
+  eat: createMirroredSpriteSet([
+    [
+      "  \\          *",
+      "   \\            /\\",
+      "    \\         _/  \\",
+      "     \\      _/   _\\",
+      "      \\    /  __   ) *",
+      "       \\  (  o _  )> o",
+      "       //  \\______/ ",
+      "      //      |  \\",
+      "     //   *   |   \\",
+      "    //",
+      "   //",
+    ],
+  ]),
+};
+
+function getFishFrameSet(state, direction) {
+  return FISH_SPRITES[state][direction];
+}
 
 // ─────────────────────────────────────────────────────────
 //  GUPPY SOUL  — local GuppyLM inference (ONNX + WASM)
@@ -915,6 +893,7 @@ function App() {
   const [sleeping, setSleeping] = useState(false);
   const [eating, setEating]     = useState(false);
   const sleepingRef = useRef(false);
+  const eatingRef = useRef(false);
   const sleepPendingRef = useRef(false);
   const [lightsOff, setLightsOff] = useState(false);
   const lightsOffRef = useRef(false);
@@ -939,6 +918,7 @@ function App() {
   useEffect(() => { needsRef.current = { hunger, happiness, energy }; }, [hunger, happiness, energy]);
   useEffect(() => { lightsOffRef.current = lightsOff; }, [lightsOff]);
   useEffect(() => { behaviorModeRef.current = behaviorMode; }, [behaviorMode]);
+  useEffect(() => { eatingRef.current = eating; }, [eating]);
 
   // Weed phase
   const [weedPhase, setWeedPhase] = useState(0);
@@ -1163,7 +1143,13 @@ function App() {
           : 1.5 + speedMultiplier * 1.6 + Math.min(Math.abs(verticalVelocity) / FISH_VERTICAL_SPEED_PERCENT_PER_SEC, 1) * 0.75
       ) * (turnWave > 0 ? 0.55 : 1);
 
-      const nextFrame = Math.floor(framePhaseRef.current) % 4;
+      const activeFishState = sleepingRef.current
+        ? 'sleep'
+        : eatingRef.current
+          ? 'eat'
+          : 'swim';
+      const activeFishDirection = fishDirRef.current > 0 ? 'right' : 'left';
+      const nextFrame = Math.floor(framePhaseRef.current) % getFishFrameSet(activeFishState, activeFishDirection).length;
       if (nextFrame !== frameRef.current) {
         frameRef.current = nextFrame;
         setFrame(nextFrame);
@@ -1540,11 +1526,10 @@ function App() {
   }
 
   // ── Compose fish ASCII
-  const fishAscii = sleeping
-    ? (fishDir > 0 ? FISH_SLEEP_R : FISH_SLEEP_L)
-    : eating
-      ? (fishDir > 0 ? FISH_EAT_R  : FISH_EAT_L)
-      : (fishDir > 0 ? FR[frame]   : FL[frame]);
+  const fishState = sleeping ? 'sleep' : eating ? 'eat' : 'swim';
+  const fishDirection = fishDir > 0 ? 'right' : 'left';
+  const fishFrames = getFishFrameSet(fishState, fishDirection);
+  const fishAscii = fishFrames[frame % fishFrames.length];
 
   const ph  = tw.phosphorColor;
   const bg  = tw.bgColor;
