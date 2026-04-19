@@ -213,6 +213,14 @@ const FISH_FOOD_Y_PERCENT = 28;
 const FISH_SLEEP_Y_PERCENT = 60;
 const FISH_VERTICAL_SPEED_PERCENT_PER_SEC = 18;
 const FISH_SLEEP_SETTLE_THRESHOLD = 0.6;
+const FISH_BOB_AMPLITUDE_PX = 1.6;
+const FISH_TILT_MAX_DEG = 7;
+const FISH_TURN_DURATION_MS = 220;
+const FISH_TURN_SQUASH = 0.22;
+const FISH_TURN_STRETCH = 0.08;
+const FOOD_PELLET_DURATION_SEC = 2.8;
+const TAP_RIPPLE_DURATION_SEC = 0.75;
+const LIGHT_FX_DURATION_SEC = 0.9;
 const AUTONOMY_ACTION_INTERVAL_MS = 16000;
 const AUTONOMY_MODE_DURATION_MS = 7000;
 const SWIM_SPEED_MULTIPLIER = 1.45;
@@ -452,7 +460,23 @@ function BinaryRain({ color, enabled }) {
 // ─────────────────────────────────────────────────────────
 //  TANK
 // ─────────────────────────────────────────────────────────
-function Tank({ tw, fishX, tankWidth, fishY, fishAscii, bubbles, weedPhase, sleeping, lightsOff, guppySpeech, bgColor }) {
+function Tank({
+  tw,
+  fishX,
+  tankWidth,
+  fishY,
+  fishPose,
+  fishAscii,
+  bubbles,
+  foodPellets,
+  tapRipples,
+  lightFx,
+  weedPhase,
+  sleeping,
+  lightsOff,
+  guppySpeech,
+  bgColor,
+}) {
   const ph = tw.phosphorColor;
 
   // Build a consistent dim color from phosphor hex
@@ -477,6 +501,25 @@ function Tank({ tw, fishX, tankWidth, fishY, fishAscii, bubbles, weedPhase, slee
 
   return (
     <div style={{ width:'100%', height:'100%', position:'relative', background: bgColor, overflow:'hidden' }}>
+      <div style={{
+        position:'absolute', inset:0, pointerEvents:'none', zIndex:0,
+        background: `
+          linear-gradient(180deg, ${dimPh(lightsOff ? 0.035 : 0.07)} 0%, transparent 18%, transparent 70%, ${dimPh(lightsOff ? 0.03 : 0.06)} 100%),
+          linear-gradient(90deg, ${dimPh(lightsOff ? 0.016 : 0.03)} 0%, transparent 14%, transparent 86%, ${dimPh(lightsOff ? 0.01 : 0.02)} 100%)
+        `,
+      }}/>
+
+      <div style={{
+        position:'absolute', inset:'6% 3% 11% 3%', pointerEvents:'none', zIndex:1,
+        backgroundImage:`repeating-linear-gradient(180deg, transparent 0 16px, ${dimPh(lightsOff ? 0.01 : 0.022)} 16px 17px, transparent 17px 34px)`,
+        opacity: lightsOff ? 0.45 : 0.75,
+      }}/>
+
+      <div style={{
+        position:'absolute', top:'7%', left:'4%', right:'4%', height:'10%',
+        pointerEvents:'none', zIndex:2,
+        background:`linear-gradient(180deg, ${dimPh(lightsOff ? 0.018 : 0.045)} 0%, ${dimPh(0)} 100%)`,
+      }}/>
 
       {/* CRT scanline sweep */}
       {tw.scanlines && (
@@ -490,13 +533,41 @@ function Tank({ tw, fishX, tankWidth, fishY, fishAscii, bubbles, weedPhase, slee
       <BinaryRain color={ph} enabled={tw.binaryRain} />
 
       {/* Light dim */}
-      {lightsOff && (
-        <div style={{
-          position:'absolute', inset:0,
-          background:'rgba(0,0,0,0.36)',
-          boxShadow:'inset 0 0 42px rgba(0,0,0,0.48)',
-          pointerEvents:'none', zIndex:5,
-        }}/>
+      <div style={{
+        position:'absolute', inset:0,
+        background:'rgba(0,0,0,0.36)',
+        boxShadow:'inset 0 0 42px rgba(0,0,0,0.48)',
+        pointerEvents:'none', zIndex:5,
+        opacity: lightsOff ? 1 : 0,
+        transition:'opacity 0.65s ease, box-shadow 0.65s ease',
+      }}/>
+
+      {lightFx && (
+        <React.Fragment>
+          <div style={{
+            position:'absolute',
+            inset:0,
+            pointerEvents:'none',
+            zIndex:6,
+            opacity: 1 - lightFx.life,
+            background: lightFx.mode === 'off'
+              ? `linear-gradient(180deg, ${dimPh(0.2)} 0%, ${dimPh(0.08)} 18%, ${dimPh(0)} 42%)`
+              : `radial-gradient(circle at 50% 10%, ${dimPh(0.34)} 0%, ${dimPh(0.12)} 22%, ${dimPh(0)} 48%)`,
+            transform: lightFx.mode === 'off'
+              ? `translateY(${lightFx.life * 14}px)`
+              : `scale(${1 + lightFx.life * 0.05})`,
+          }}/>
+          <div style={{
+            position:'absolute',
+            left:'4%',
+            right:'4%',
+            top:`${6 + lightFx.life * (lightFx.mode === 'off' ? 20 : 8)}%`,
+            height:1,
+            background: dimPh(lightFx.mode === 'off' ? 0.26 * (1 - lightFx.life) : 0.34 * (1 - lightFx.life)),
+            pointerEvents:'none',
+            zIndex:7,
+          }}/>
+        </React.Fragment>
       )}
 
       {/* Surface shimmer */}
@@ -508,6 +579,21 @@ function Tank({ tw, fishX, tankWidth, fishY, fishAscii, bubbles, weedPhase, slee
         {Array.from({length:60},(_,i) => ['~','≈','~','~','-','≈','~'][( i + Math.floor(weedPhase*1.5) ) % 7]).join('')}
       </div>
 
+      {/* Food pellets */}
+      {foodPellets.map((pellet) => (
+        <div key={pellet.id} style={{
+          position:'absolute',
+          left:`${pellet.x}px`,
+          top:`${pellet.y}%`,
+          color: dimPh(0.22 + (1 - pellet.life) * 0.3),
+          fontSize:12,
+          fontFamily:'monospace',
+          transform:`translate(-50%, -50%) translateX(${Math.sin(pellet.phase + pellet.life * 7) * pellet.wobble}px)`,
+          pointerEvents:'none',
+          zIndex:5,
+        }}>{pellet.char}</div>
+      ))}
+
       {/* Bubbles */}
       {bubbles.map(b => (
         <div key={b.id} style={{
@@ -518,6 +604,52 @@ function Tank({ tw, fishX, tankWidth, fishY, fishAscii, bubbles, weedPhase, slee
           pointerEvents:'none', zIndex:4,
         }}>{b.char}</div>
       ))}
+
+      {/* Tap ripples */}
+      {tapRipples.map((ripple) => {
+        const size = 18 + ripple.life * 120;
+        const innerSize = size * 0.62;
+        const opacity = (1 - ripple.life) * 0.55;
+        return (
+          <React.Fragment key={ripple.id}>
+            <div style={{
+              position:'absolute',
+              left:`${ripple.x}px`,
+              top:`${ripple.y}%`,
+              width:size,
+              height:size * 0.42,
+              transform:'translate(-50%, -50%)',
+              border:`1px solid ${dimPh(opacity)}`,
+              borderRadius:'999px',
+              pointerEvents:'none',
+              zIndex:8,
+            }}/>
+            <div style={{
+              position:'absolute',
+              left:`${ripple.x}px`,
+              top:`${ripple.y}%`,
+              width:innerSize,
+              height:innerSize * 0.38,
+              transform:'translate(-50%, -50%)',
+              border:`1px solid ${dimPh(opacity * 0.7)}`,
+              borderRadius:'999px',
+              pointerEvents:'none',
+              zIndex:8,
+            }}/>
+            <div style={{
+              position:'absolute',
+              left:`${ripple.x}px`,
+              top:`${Math.max(ripple.y - 10, 8)}%`,
+              width:1,
+              height:22 + ripple.life * 10,
+              background:`linear-gradient(180deg, ${dimPh(opacity * 0.9)} 0%, ${dimPh(0)} 100%)`,
+              transform:'translateX(-50%)',
+              pointerEvents:'none',
+              zIndex:8,
+            }}/>
+          </React.Fragment>
+        );
+      })}
 
       {/* Seaweed — single 2D ASCII grid, one <pre> block */}
       {(() => {
@@ -546,6 +678,17 @@ function Tank({ tw, fishX, tankWidth, fishY, fishAscii, bubbles, weedPhase, slee
         );
       })()}
 
+      <div style={{
+        position:'absolute',
+        left:0,
+        right:0,
+        bottom:'8%',
+        height:'12%',
+        background:`linear-gradient(180deg, transparent 0%, ${dimPh(lightsOff ? 0.03 : 0.07)} 100%)`,
+        pointerEvents:'none',
+        zIndex:3,
+      }}/>
+
       {/* Floor */}
       <div style={{
         position:'absolute', bottom:0, left:0, right:0, height:'8%',
@@ -561,12 +704,19 @@ function Tank({ tw, fishX, tankWidth, fishY, fishAscii, bubbles, weedPhase, slee
       <div style={{
         position:'absolute',
         left:`${safeFishX}px`, top:`${fishY}%`,
-        transform:'translate(-50%, -50%)',
+        transform:`
+          translate(-50%, -50%)
+          translateY(${fishPose.bobPx}px)
+          rotate(${fishPose.tiltDeg}deg)
+          scaleX(${fishPose.squashX})
+          scaleY(${fishPose.squashY})
+        `,
+        transformOrigin:'50% 50%',
         fontFamily:'monospace', fontSize: tw.fishSize,
         color: sleeping ? dimPh(0.35) : ph,
         whiteSpace:'pre', lineHeight:1.15,
         textShadow: sleeping ? 'none' : `0 0 12px ${dimPh(0.5)}`,
-        transition:'color 1.5s',
+        transition:'color 1.5s, text-shadow 1.5s',
         zIndex:6, pointerEvents:'none',
       }}>{fishAscii}</div>
 
@@ -607,6 +757,41 @@ function Tank({ tw, fishX, tankWidth, fishY, fishAscii, bubbles, weedPhase, slee
           {guppySpeech}
         </div>
       )}
+
+      <div style={{
+        position:'absolute',
+        inset:0,
+        pointerEvents:'none',
+        zIndex:25,
+        boxShadow:`
+          inset 0 0 0 1px ${dimPh(lightsOff ? 0.12 : 0.18)},
+          inset 0 16px 26px ${dimPh(lightsOff ? 0.05 : 0.1)},
+          inset 16px 0 30px ${dimPh(lightsOff ? 0.03 : 0.06)},
+          inset -10px 0 18px ${dimPh(lightsOff ? 0.015 : 0.035)}
+        `,
+      }}/>
+
+      <div style={{
+        position:'absolute',
+        top:'4%',
+        bottom:'12%',
+        left:'3%',
+        width:1,
+        background:`linear-gradient(180deg, ${dimPh(lightsOff ? 0.12 : 0.24)} 0%, ${dimPh(0)} 52%, ${dimPh(lightsOff ? 0.05 : 0.1)} 100%)`,
+        pointerEvents:'none',
+        zIndex:26,
+      }}/>
+
+      <div style={{
+        position:'absolute',
+        top:'4%',
+        bottom:'12%',
+        right:'4%',
+        width:1,
+        background:`linear-gradient(180deg, ${dimPh(lightsOff ? 0.05 : 0.1)} 0%, ${dimPh(0)} 45%, ${dimPh(lightsOff ? 0.02 : 0.06)} 100%)`,
+        pointerEvents:'none',
+        zIndex:26,
+      }}/>
 
       {/* Corner decoration */}
       <div style={{ position:'absolute', top:8, left:8, color: dimPh(0.18), fontSize:10, fontFamily:'monospace', pointerEvents:'none' }}>┌─</div>
@@ -713,10 +898,15 @@ function App() {
   const [fishY, setFishY]   = useState(FISH_CRUISE_Y_PERCENT);
   const [fishDir, setFishDir] = useState(1);
   const [frame, setFrame]   = useState(0);
+  const [fishPose, setFishPose] = useState({ bobPx: 0, tiltDeg: 0, squashX: 1, squashY: 1 });
   const fishDirRef = useRef(1);
   const fishXRef = useRef(0);
   const fishYRef = useRef(FISH_CRUISE_Y_PERCENT);
   const fishDRef = useRef(1);
+  const frameRef = useRef(0);
+  const framePhaseRef = useRef(0);
+  const swimPhaseRef = useRef(0);
+  const turnRef = useRef({ start: 0, until: 0, switchAt: 0, pendingDir: 0 });
   const tankRef = useRef(null);
   const [tankWidth, setTankWidth] = useState(0);
   const tankWidthRef = useRef(0);
@@ -734,7 +924,11 @@ function App() {
 
   // Bubbles
   const [bubbles, setBubbles] = useState([]);
+  const [foodPellets, setFoodPellets] = useState([]);
+  const [tapRipples, setTapRipples] = useState([]);
+  const [lightFx, setLightFx] = useState(null);
   const bubbleId = useRef(0);
+  const effectIdRef = useRef(0);
 
   // Needs
   const [hunger,    setHunger]    = useState(72);
@@ -847,19 +1041,36 @@ function App() {
     if (!tankWidth) return;
 
     let lastTick = performance.now();
+
+    const applyFishDirection = (nextDir) => {
+      fishDirRef.current = nextDir;
+      fishDRef.current = nextDir;
+      setFishDir(current => current === nextDir ? current : nextDir);
+    };
+
+    const beginTurn = (nextDir, now) => {
+      turnRef.current = {
+        start: now,
+        until: now + FISH_TURN_DURATION_MS,
+        switchAt: now + FISH_TURN_DURATION_MS / 2,
+        pendingDir: nextDir,
+      };
+    };
+
     const id = setInterval(() => {
       const now = performance.now();
       const deltaSeconds = Math.min((now - lastTick) / 1000, 0.08);
       lastTick = now;
+      const previousY = fishYRef.current;
 
       const nextTargetY = getFishTargetY();
       const nextY = moveToward(
-        fishYRef.current,
+        previousY,
         nextTargetY,
         FISH_VERTICAL_SPEED_PERCENT_PER_SEC * deltaSeconds,
       );
 
-      if (nextY !== fishYRef.current) {
+      if (nextY !== previousY) {
         fishYRef.current = nextY;
         setFishY(current => current === nextY ? current : nextY);
       }
@@ -873,44 +1084,94 @@ function App() {
         return;
       }
 
-      if (sleepingRef.current || sleepPendingRef.current) return;
+      const speedMultiplier = behaviorModeRef.current === 'swim'
+        ? SWIM_SPEED_MULTIPLIER
+        : behaviorModeRef.current === 'food'
+          ? SEEK_FOOD_SPEED_MULTIPLIER
+          : 1;
 
-      setFishX(x => {
-        const bounds = getFishBounds(tankWidthRef.current);
-        const speedMultiplier = behaviorModeRef.current === 'swim'
-          ? SWIM_SPEED_MULTIPLIER
+      const activeTurn = turnRef.current.until > now;
+      if (activeTurn && turnRef.current.pendingDir && now >= turnRef.current.switchAt && fishDirRef.current !== turnRef.current.pendingDir) {
+        applyFishDirection(turnRef.current.pendingDir);
+      }
+
+      if (!activeTurn && turnRef.current.pendingDir) {
+        turnRef.current = { start: 0, until: 0, switchAt: 0, pendingDir: 0 };
+      }
+
+      if (!sleepingRef.current && !sleepPendingRef.current && !(turnRef.current.until > now)) {
+        setFishX(x => {
+          const bounds = getFishBounds(tankWidthRef.current);
+          let nx = x + fishDirRef.current * FISH_SPEED_PX_PER_SEC * speedMultiplier * deltaSeconds;
+
+          if (nx > bounds.max) {
+            nx = bounds.max;
+            beginTurn(-1, now);
+          } else if (nx < bounds.min) {
+            nx = bounds.min;
+            beginTurn(1, now);
+          }
+
+          fishXRef.current = nx;
+          return nx;
+        });
+      }
+
+      const turnState = turnRef.current;
+      const turnProgress = turnState.until > now
+        ? clamp((now - turnState.start) / FISH_TURN_DURATION_MS, 0, 1)
+        : 0;
+      const turnWave = Math.sin(turnProgress * Math.PI);
+      const verticalVelocity = deltaSeconds > 0 ? (nextY - previousY) / deltaSeconds : 0;
+      const verticalIntent = clamp((previousY - nextTargetY) / 10, -1, 1);
+      const bobAmplitude = sleepingRef.current
+        ? 0
+        : behaviorModeRef.current === 'swim'
+          ? FISH_BOB_AMPLITUDE_PX * 1.45
           : behaviorModeRef.current === 'food'
-            ? SEEK_FOOD_SPEED_MULTIPLIER
-            : 1;
-        let nx = x + fishDirRef.current * FISH_SPEED_PX_PER_SEC * speedMultiplier * deltaSeconds;
+            ? FISH_BOB_AMPLITUDE_PX * 1.15
+            : FISH_BOB_AMPLITUDE_PX;
 
-        if (nx > bounds.max) {
-          fishDirRef.current = -1;
-          fishDRef.current = -1;
-          setFishDir(-1);
-          nx = bounds.max;
-        }
+      swimPhaseRef.current += deltaSeconds * (
+        sleepingRef.current
+          ? 0.35
+          : 1.4 + speedMultiplier * 1.1 + Math.min(Math.abs(verticalVelocity) / FISH_VERTICAL_SPEED_PERCENT_PER_SEC, 1) * 0.5
+      );
 
-        if (nx < bounds.min) {
-          fishDirRef.current = 1;
-          fishDRef.current = 1;
-          setFishDir(1);
-          nx = bounds.min;
-        }
+      const bobPx = sleepingRef.current
+        ? 0
+        : Math.sin(swimPhaseRef.current) * bobAmplitude + turnWave * 0.9;
 
-        fishXRef.current = nx;
-        return nx;
+      const tiltBase = sleepingRef.current
+        ? 0
+        : (-fishDirRef.current * verticalIntent * FISH_TILT_MAX_DEG) + Math.cos(swimPhaseRef.current) * 1.25;
+
+      const tiltDeg = turnWave > 0
+        ? tiltBase * (1 - turnWave * 0.85)
+        : tiltBase;
+
+      setFishPose({
+        bobPx,
+        tiltDeg,
+        squashX: 1 - turnWave * FISH_TURN_SQUASH,
+        squashY: 1 + turnWave * FISH_TURN_STRETCH,
       });
+
+      framePhaseRef.current += deltaSeconds * (
+        sleepingRef.current
+          ? 0.25
+          : 1.5 + speedMultiplier * 1.6 + Math.min(Math.abs(verticalVelocity) / FISH_VERTICAL_SPEED_PERCENT_PER_SEC, 1) * 0.75
+      ) * (turnWave > 0 ? 0.55 : 1);
+
+      const nextFrame = Math.floor(framePhaseRef.current) % 4;
+      if (nextFrame !== frameRef.current) {
+        frameRef.current = nextFrame;
+        setFrame(nextFrame);
+      }
     }, FISH_TICK_MS);
 
     return () => clearInterval(id);
   }, [tankWidth]);
-
-  // ── Frame tick
-  useEffect(() => {
-    const id = setInterval(() => setFrame(f => (f+1) % 4), 200);
-    return () => clearInterval(id);
-  }, []);
 
   // ── Weed sway
   useEffect(() => {
@@ -940,6 +1201,38 @@ function App() {
     const id = setInterval(() => {
       setBubbles(b => b.map(bb => ({ ...bb, y: bb.y - bb.speed })).filter(bb => bb.y > 4));
     }, 55);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    let lastTick = performance.now();
+    const id = setInterval(() => {
+      const now = performance.now();
+      const deltaSeconds = Math.min((now - lastTick) / 1000, 0.08);
+      lastTick = now;
+
+      setFoodPellets((items) => items
+        .map((pellet) => ({
+          ...pellet,
+          y: pellet.y + pellet.speed * deltaSeconds,
+          life: pellet.life + deltaSeconds / FOOD_PELLET_DURATION_SEC,
+        }))
+        .filter((pellet) => pellet.life < 1 && pellet.y < pellet.maxY));
+
+      setTapRipples((items) => items
+        .map((ripple) => ({
+          ...ripple,
+          life: ripple.life + deltaSeconds / TAP_RIPPLE_DURATION_SEC,
+        }))
+        .filter((ripple) => ripple.life < 1));
+
+      setLightFx((current) => {
+        if (!current) return null;
+        const nextLife = current.life + deltaSeconds / LIGHT_FX_DURATION_SEC;
+        return nextLife >= 1 ? null : { ...current, life: nextLife };
+      });
+    }, 55);
+
     return () => clearInterval(id);
   }, []);
 
@@ -1060,6 +1353,40 @@ function App() {
     setLightsOff(nextLightsOff);
   }
 
+  function spawnFoodPellets() {
+    const bounds = getFishBounds(tankWidthRef.current);
+    const baseX = tankWidthRef.current
+      ? clamp(fishXRef.current, bounds.min + 18, bounds.max - 18)
+      : fishXRef.current;
+    const nextPellets = Array.from({ length: 6 }, (_, index) => ({
+      id: effectIdRef.current++,
+      x: baseX + (index - 2.5) * 8 + (Math.random() * 10 - 5),
+      y: 8 + Math.random() * 2.5,
+      maxY: 24 + Math.random() * 11,
+      speed: 7 + Math.random() * 8,
+      wobble: 2 + Math.random() * 4,
+      phase: Math.random() * Math.PI * 2,
+      char: ['·', '•', '°'][Math.floor(Math.random() * 3)],
+      life: 0,
+    }));
+    setFoodPellets((current) => [...current.slice(-14), ...nextPellets]);
+  }
+
+  function spawnTapRipple() {
+    const x = tankWidthRef.current
+      ? clamp(fishXRef.current + (Math.random() * 36 - 18), 40, tankWidthRef.current - 40)
+      : fishXRef.current;
+    const y = clamp(fishYRef.current - 6, 14, 52);
+    setTapRipples((current) => [
+      ...current.slice(-4),
+      { id: effectIdRef.current++, x, y, life: 0 },
+    ]);
+  }
+
+  function spawnLightFx(mode) {
+    setLightFx({ id: effectIdRef.current++, mode, life: 0 });
+  }
+
   async function executeBehaviorAction(action) {
     let plannedAction = action;
 
@@ -1133,6 +1460,7 @@ function App() {
     try {
       wakeFish();
       setTimedBehaviorMode('food', 3600);
+      spawnFoodPellets();
       const newNeeds = updateNeeds(current => ({
         ...current,
         hunger: clamp(current.hunger + 38, 0, 100),
@@ -1154,6 +1482,7 @@ function App() {
     setBusyState(true);
     try {
       wakeFish();
+      spawnTapRipple();
       const newNeeds = updateNeeds(current => ({
         ...current,
         happiness: clamp(current.happiness + 28, 0, 100),
@@ -1174,6 +1503,7 @@ function App() {
     try {
       const nextLightsOff = !lightsOffRef.current;
       setLightsOffState(nextLightsOff);
+      spawnLightFx(nextLightsOff ? 'off' : 'on');
       if (!nextLightsOff && (sleepingRef.current || sleepPendingRef.current)) {
         wakeFish();
       }
@@ -1294,8 +1624,12 @@ function App() {
             fishX={fishX}
             tankWidth={tankWidth}
             fishY={fishY}
+            fishPose={fishPose}
             fishAscii={fishAscii}
             bubbles={bubbles}
+            foodPellets={foodPellets}
+            tapRipples={tapRipples}
+            lightFx={lightFx}
             weedPhase={weedPhase}
             sleeping={sleeping}
             lightsOff={lightsOff}
