@@ -1,49 +1,27 @@
 # Guppy the Fish
 
-A tiny browser fish tank powered by GuppyLM.
+An ASCII fish tank that runs GuppyLM locally in the browser.
 
 Live site: <https://rkmax.github.io/guppy-the-fish/>
 
-## What it is
+Guppy combines a small ONNX-backed language model runtime with a lightweight
+fish simulation. It reacts to chat, tracks a few basic needs, and picks simple
+autonomous actions without relying on a backend service.
 
-- A single-page ASCII fish tank.
-- Local browser inference with ONNX Runtime Web.
-- Lightweight autonomous fish behavior driven by GuppyLM.
-- Static deployment through GitHub Pages.
-
-## Project layout
+## Structure
 
 - `app.jsx`: UI, fish behavior, and interaction logic.
 - `guppy-engine.js`: tokenizer and ONNX inference layer.
 - `index.html`: static shell and runtime script loading.
-- `scripts/build.mjs`: builds the publishable site into `dist/`.
-- `.github/workflows/pages.yml`: GitHub Pages deployment workflow.
+- `scripts/build.mjs`: builds the publishable output into `dist/`.
 
 ## Local development
 
-Install dependencies:
-
 ```bash
 npm ci
-```
-
-Build the site:
-
-```bash
 npm run build
-```
-
-Serve the generated files:
-
-```bash
 cd dist
 python3 -m http.server 8000
 ```
 
-Then open <http://localhost:8000>.
-
-## Deployment
-
-`main` contains source files only.
-
-Every push to `main` triggers GitHub Actions, builds `dist/`, and deploys the site to GitHub Pages.
+Open <http://localhost:8000>.
