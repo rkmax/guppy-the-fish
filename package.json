@@ -2,7 +2,7 @@
   "name": "guppy",
   "private": true,
   "scripts": {
-    "build": "esbuild app.jsx --outfile=app.js --format=iife --target=es2018"
+    "build": "node scripts/build.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.11"
