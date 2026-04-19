@@ -258,6 +258,15 @@ const FISH_TICK_MS = 40;
 const FISH_SLEEP_Z_OFFSET_PX = 24;
 const FISH_BUBBLE_OFFSET_PX = 18;
 const FISH_BUBBLE_JITTER_PX = 10;
+const AUTONOMY_ACTION_INTERVAL_MS = 16000;
+const AUTONOMY_MODE_DURATION_MS = 7000;
+const SWIM_SPEED_MULTIPLIER = 1.45;
+const SEEK_FOOD_SPEED_MULTIPLIER = 1.2;
+const AUTONOMY_IDLE_PROMPTS = [
+  'what are you thinking right now',
+  'what are you doing right now',
+  'say one short fish thought',
+];
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -271,11 +280,117 @@ function getFishBounds(tankWidth) {
   };
 }
 
-async function guppyReply(userText, needs) {
+function pickPrompt(list) {
+  return list[Math.floor(Math.random() * list.length)];
+}
+
+function buildNeedsCue(needs, context = {}) {
+  if (!needs) return '';
+
+  const cues = [];
+
+  if (context.sleeping) {
+    cues.push('sleeping');
+  } else if (context.behaviorMode === 'swim') {
+    cues.push('active');
+  } else if (context.behaviorMode === 'food') {
+    cues.push('looking for food');
+  }
+
+  if (context.lightsOff) {
+    cues.push('dark');
+  }
+
+  if (needs.hunger < 25) {
+    cues.push('hungry', 'food');
+  } else if (needs.hunger < 45) {
+    cues.push('hungry');
+  }
+
+  if (needs.happiness < 25) {
+    cues.push('lonely');
+  } else if (needs.happiness > 80) {
+    cues.push('happy');
+  }
+
+  if (needs.energy < 20) {
+    cues.push('tired', 'rest');
+  } else if (needs.energy > 80) {
+    cues.push('swim');
+  }
+
+  return [...new Set(cues)].join('. ');
+}
+
+function buildNeedsAwarePrompt(userText, needs, context = {}) {
+  const cue = buildNeedsCue(needs, context);
+  const prompt = String(userText || '').trim();
+  if (!cue) return prompt;
+  if (!prompt) return `${cue}.`;
+  return `${cue}. ${prompt}`;
+}
+
+function buildBehaviorPrompt(needs, context = {}) {
+  const cue = buildNeedsCue(needs, context);
+  const parts = [
+    'choose one next fish action',
+    'actions. sleep. wake. swim. food. idle',
+    context.sleeping ? 'you are sleeping now' : 'you are awake now',
+  ];
+
+  if (cue) {
+    parts.push(`state. ${cue}`);
+  }
+
+  parts.push('answer with only one action');
+  return parts.join('. ');
+}
+
+function parseBehaviorAction(text, context = {}) {
+  const normalized = String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!normalized) {
+    return context.sleeping ? 'sleep' : 'idle';
+  }
+
+  if (normalized.includes('wake')) return 'wake';
+  if (normalized.includes('sleep') || normalized.includes('rest')) return 'sleep';
+  if (normalized.includes('food') || normalized.includes('eat') || normalized.includes('hungry')) return 'food';
+  if (normalized.includes('swim') || normalized.includes('move') || normalized.includes('explore')) return 'swim';
+  if (normalized.includes('idle') || normalized.includes('wait') || normalized.includes('still')) return 'idle';
+
+  return context.sleeping ? 'sleep' : 'idle';
+}
+
+function fallbackBehaviorAction(needs, context = {}) {
+  if (context.sleeping) {
+    return needs.energy > 72 ? 'wake' : 'sleep';
+  }
+
+  if (needs.energy < 18) return 'sleep';
+  if (needs.hunger < 30) return 'food';
+  if (needs.happiness < 35 || needs.energy > 80) return 'swim';
+  return 'idle';
+}
+
+function buildActionThoughtPrompt(action) {
+  if (action === 'sleep') return 'you decide to sleep now';
+  if (action === 'wake') return 'you wake up again';
+  if (action === 'swim') return 'you swim around the tank';
+  if (action === 'food') return 'you look for food near the surface';
+  return pickPrompt(AUTONOMY_IDLE_PROMPTS);
+}
+
+async function guppyReply(userText, needs, context = {}) {
   const engine = window.guppyEngine;
+  const prompt = buildNeedsAwarePrompt(userText, needs, context);
   if (engine && engine.ready) {
     try {
-      const result = await engine.generate([{ role: 'user', content: userText }], {
+      const result = await engine.generate([{ role: 'user', content: prompt }], {
         maxTokens: 32,
         temperature: 0.7,
         topK: 50,
@@ -285,26 +400,37 @@ async function guppyReply(userText, needs) {
       console.error('[GuppyUI] reply generation failed:', err);
     }
   }
-  return window.templateResponse(userText, needs);
+  return window.templateResponse(prompt, needs);
 }
 
-async function guppyAutoThought(needs) {
+async function guppyPlanAction(needs, context = {}) {
   const engine = window.guppyEngine;
-  // Build a natural prompt that reflects current needs
-  let prompt = 'what are you thinking right now';
-  if (needs.hunger < 25)     prompt = 'are you hungry';
-  else if (needs.hunger < 45) prompt = 'do you want food';
-  else if (needs.happiness < 25) prompt = 'are you lonely';
-  else if (needs.energy < 20)    prompt = 'are you tired';
-  else {
-    const idle = ['do you like bubbles','what do you see','how is the water','tell me about your tank'];
-    prompt = idle[Math.floor(Math.random() * idle.length)];
-  }
+  const prompt = buildBehaviorPrompt(needs, context);
 
   if (engine && engine.ready) {
     try {
       const result = await engine.generate(
         [{ role: 'user', content: prompt }],
+        { maxTokens: 8, temperature: 0.2, topK: 10 },
+      );
+      return parseBehaviorAction(result, context);
+    } catch (err) {
+      console.error('[GuppyUI] autonomy planning failed:', err);
+    }
+  }
+
+  return fallbackBehaviorAction(needs, context);
+}
+
+async function guppyAutoThought(needs, context = {}, seedPrompt = '') {
+  const engine = window.guppyEngine;
+  const prompt = seedPrompt || pickPrompt(AUTONOMY_IDLE_PROMPTS);
+  const promptWithNeeds = buildNeedsAwarePrompt(prompt, needs, context);
+
+  if (engine && engine.ready) {
+    try {
+      const result = await engine.generate(
+        [{ role: 'user', content: promptWithNeeds }],
         { maxTokens: 32, temperature: 0.7, topK: 50 },
       );
       if (result) return result;
@@ -312,7 +438,7 @@ async function guppyAutoThought(needs) {
       console.error('[GuppyUI] auto-thought generation failed:', err);
     }
   }
-  return window.templateResponse(prompt, needs);
+  return window.templateResponse(promptWithNeeds, needs);
 }
 
 // ─────────────────────────────────────────────────────────
@@ -361,7 +487,7 @@ function BinaryRain({ color, enabled }) {
 // ─────────────────────────────────────────────────────────
 //  TANK
 // ─────────────────────────────────────────────────────────
-function Tank({ tw, fishX, tankWidth, fishY, fishAscii, bubbles, weedPhase, sleeping, guppySpeech, bgColor }) {
+function Tank({ tw, fishX, tankWidth, fishY, fishAscii, bubbles, weedPhase, sleeping, lightsOff, guppySpeech, bgColor }) {
   const ph = tw.phosphorColor;
   const dim = (a = 0.15) => ph.replace(')', `, ${a})`).replace('rgb', 'rgba').replace('#', 'rgba(').replace(/rgba\(([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2}), ([0-9.]+)\)/, (_, r,g,b,a) => `rgba(${parseInt(r,16)},${parseInt(g,16)},${parseInt(b,16)},${a})`);
 
@@ -398,6 +524,16 @@ function Tank({ tw, fishX, tankWidth, fishY, fishAscii, bubbles, weedPhase, slee
 
       {/* Binary rain */}
       <BinaryRain color={ph} enabled={tw.binaryRain} />
+
+      {/* Light dim */}
+      {lightsOff && (
+        <div style={{
+          position:'absolute', inset:0,
+          background:'rgba(0,0,0,0.36)',
+          boxShadow:'inset 0 0 42px rgba(0,0,0,0.48)',
+          pointerEvents:'none', zIndex:5,
+        }}/>
+      )}
 
       {/* Surface shimmer */}
       <div style={{
@@ -623,6 +759,11 @@ function App() {
   const [sleeping, setSleeping] = useState(false);
   const [eating, setEating]     = useState(false);
   const sleepingRef = useRef(false);
+  const [lightsOff, setLightsOff] = useState(false);
+  const lightsOffRef = useRef(false);
+  const [behaviorMode, setBehaviorMode] = useState('idle');
+  const behaviorModeRef = useRef('idle');
+  const behaviorTimerRef = useRef(null);
 
   // Bubbles
   const [bubbles, setBubbles] = useState([]);
@@ -635,6 +776,8 @@ function App() {
   const needsRef = useRef({ hunger:72, happiness:85, energy:90 });
 
   useEffect(() => { needsRef.current = { hunger, happiness, energy }; }, [hunger, happiness, energy]);
+  useEffect(() => { lightsOffRef.current = lightsOff; }, [lightsOff]);
+  useEffect(() => { behaviorModeRef.current = behaviorMode; }, [behaviorMode]);
 
   // Weed phase
   const [weedPhase, setWeedPhase] = useState(0);
@@ -654,6 +797,7 @@ function App() {
 
   useEffect(() => () => {
     if (speechTimerRef.current) clearTimeout(speechTimerRef.current);
+    if (behaviorTimerRef.current) clearTimeout(behaviorTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -717,7 +861,10 @@ function App() {
   // ── Generate greeting on mount
   useEffect(() => {
     (async () => {
-      const greeting = await guppyAutoThought({ hunger: 72, happiness: 85, energy: 90 });
+      const greeting = await guppyAutoThought(
+        { hunger: 72, happiness: 85, energy: 90 },
+        { sleeping: false, lightsOff: false, behaviorMode: 'idle' },
+      );
       showSpeech(greeting);
       const initialMessages = greeting
         ? [{ from:'guppy', text: greeting, channel:'ambient' }]
@@ -741,7 +888,12 @@ function App() {
 
       setFishX(x => {
         const bounds = getFishBounds(tankWidthRef.current);
-        let nx = x + fishDirRef.current * FISH_SPEED_PX_PER_SEC * deltaSeconds;
+        const speedMultiplier = behaviorModeRef.current === 'swim'
+          ? SWIM_SPEED_MULTIPLIER
+          : behaviorModeRef.current === 'food'
+            ? SEEK_FOOD_SPEED_MULTIPLIER
+            : 1;
+        let nx = x + fishDirRef.current * FISH_SPEED_PX_PER_SEC * speedMultiplier * deltaSeconds;
 
         if (nx > bounds.max) {
           fishDirRef.current = -1;
@@ -816,19 +968,18 @@ function App() {
     return () => clearInterval(id);
   }, []);
 
-  // ── Auto-thought cycle
+  // ── Autonomy cycle
   useEffect(() => {
     const id = setInterval(async () => {
-      if (busyRef.current || sleepingRef.current) return;
+      if (busyRef.current) return;
       busyRef.current = true;
       try {
-        const thought = await guppyAutoThought(needsRef.current);
-        showSpeech(thought);
-        pushMessage({ from:'guppy', text: thought, channel:'ambient' });
+        const action = await guppyPlanAction(needsRef.current, getPromptContext());
+        await executeBehaviorAction(action);
       } finally {
         busyRef.current = false;
       }
-    }, 20000);
+    }, AUTONOMY_ACTION_INTERVAL_MS);
     return () => clearInterval(id);
   }, []);
 
@@ -846,18 +997,131 @@ function App() {
     speechTimerRef.current = setTimeout(() => setSpeech(''), 7000);
   }
 
+  function getPromptContext(overrides = {}) {
+    return {
+      sleeping: overrides.sleeping ?? sleepingRef.current,
+      lightsOff: overrides.lightsOff ?? lightsOffRef.current,
+      behaviorMode: overrides.behaviorMode ?? behaviorModeRef.current,
+    };
+  }
+
+  function updateNeeds(updater) {
+    const nextNeeds = typeof updater === 'function' ? updater(needsRef.current) : updater;
+    needsRef.current = nextNeeds;
+    setHunger(nextNeeds.hunger);
+    setHappiness(nextNeeds.happiness);
+    setEnergy(nextNeeds.energy);
+    return nextNeeds;
+  }
+
+  function setTimedBehaviorMode(nextMode, durationMs = 0) {
+    if (behaviorTimerRef.current) {
+      clearTimeout(behaviorTimerRef.current);
+      behaviorTimerRef.current = null;
+    }
+
+    behaviorModeRef.current = nextMode;
+    setBehaviorMode(nextMode);
+
+    if (!durationMs) return;
+
+    behaviorTimerRef.current = setTimeout(() => {
+      behaviorTimerRef.current = null;
+      behaviorModeRef.current = 'idle';
+      setBehaviorMode(current => current === nextMode ? 'idle' : current);
+    }, durationMs);
+  }
+
+  function setSleepingState(nextSleeping) {
+    sleepingRef.current = nextSleeping;
+    setSleeping(nextSleeping);
+    if (nextSleeping) {
+      setTimedBehaviorMode('idle');
+    }
+  }
+
+  function setLightsOffState(nextLightsOff) {
+    lightsOffRef.current = nextLightsOff;
+    setLightsOff(nextLightsOff);
+  }
+
+  async function executeBehaviorAction(action) {
+    let plannedAction = action;
+
+    if (sleepingRef.current && action === 'sleep') {
+      plannedAction = 'idle';
+    } else if (!sleepingRef.current && action === 'wake') {
+      plannedAction = 'idle';
+    }
+
+    if (sleepingRef.current && plannedAction === 'idle') {
+      return;
+    }
+
+    let eventText = '';
+    let channel = 'ambient';
+
+    if (plannedAction === 'sleep') {
+      setSleepingState(true);
+      eventText = 'guppy decided to sleep';
+      channel = 'event';
+    } else if (plannedAction === 'wake') {
+      setSleepingState(false);
+      eventText = 'guppy woke up';
+      channel = 'event';
+    } else if (plannedAction === 'swim') {
+      if (sleepingRef.current) setSleepingState(false);
+      setTimedBehaviorMode('swim', AUTONOMY_MODE_DURATION_MS);
+      updateNeeds(current => ({
+        ...current,
+        happiness: clamp(current.happiness + 4, 0, 100),
+        energy: clamp(current.energy - 3, 0, 100),
+      }));
+      eventText = 'guppy started swimming laps';
+      channel = 'event';
+    } else if (plannedAction === 'food') {
+      if (sleepingRef.current) setSleepingState(false);
+      setTimedBehaviorMode('food', AUTONOMY_MODE_DURATION_MS);
+      updateNeeds(current => ({
+        ...current,
+        happiness: clamp(current.happiness + 2, 0, 100),
+      }));
+      eventText = 'guppy looked for food near the surface';
+      channel = 'event';
+    }
+
+    const thought = await guppyAutoThought(
+      needsRef.current,
+      getPromptContext(),
+      buildActionThoughtPrompt(plannedAction),
+    );
+
+    if (eventText) {
+      pushMessage({ from:'tank', text: eventText, channel:'event' });
+    }
+
+    if (thought) {
+      showSpeech(thought);
+      pushMessage({ from:'guppy', text: thought, channel });
+    }
+  }
+
   // ── Actions
   async function feed() {
-    setHunger(h => Math.min(100, h + 38));
-    setEating(true);
-    setTimeout(() => setEating(false), 2200);
     if (busyRef.current) return;
     busyRef.current = true;
     try {
+      setSleepingState(false);
+      setTimedBehaviorMode('food', 3600);
+      const newNeeds = updateNeeds(current => ({
+        ...current,
+        hunger: clamp(current.hunger + 38, 0, 100),
+      }));
+      setEating(true);
+      setTimeout(() => setEating(false), 2200);
       const trigger = 'you dropped food in the water';
-      const newNeeds = { ...needsRef.current, hunger: Math.min(100, needsRef.current.hunger + 38) };
       pushMessage({ from:'tank', text: trigger, channel:'event' });
-      const msg = await guppyReply(trigger, newNeeds);
+      const msg = await guppyReply(trigger, newNeeds, getPromptContext({ behaviorMode: 'food' }));
       showSpeech(msg);
       pushMessage({ from:'guppy', text: msg, channel:'event' });
     } finally {
@@ -866,13 +1130,17 @@ function App() {
   }
 
   async function tap() {
-    setHappiness(hp => Math.min(100, hp + 28));
     if (busyRef.current) return;
     busyRef.current = true;
     try {
+      setSleepingState(false);
+      const newNeeds = updateNeeds(current => ({
+        ...current,
+        happiness: clamp(current.happiness + 28, 0, 100),
+      }));
       const trigger = 'you tapped on the glass';
       pushMessage({ from:'tank', text: trigger, channel:'event' });
-      const msg = await guppyReply(trigger, needsRef.current);
+      const msg = await guppyReply(trigger, newNeeds, getPromptContext());
       showSpeech(msg);
       pushMessage({ from:'guppy', text: msg, channel:'event' });
     } finally {
@@ -881,16 +1149,18 @@ function App() {
   }
 
   async function toggleLight() {
-    const wasAsleep = sleepingRef.current;
-    sleepingRef.current = !wasAsleep;
-    setSleeping(!wasAsleep);
     if (busyRef.current) return;
     busyRef.current = true;
     try {
-      const trigger = wasAsleep ? 'the light just came back on' : 'the light just turned off';
-      const eventText = wasAsleep ? 'lights on' : 'lights off';
+      const nextLightsOff = !lightsOffRef.current;
+      setLightsOffState(nextLightsOff);
+      if (!nextLightsOff && sleepingRef.current) {
+        setSleepingState(false);
+      }
+      const trigger = nextLightsOff ? 'the light just turned off' : 'the light just came back on';
+      const eventText = nextLightsOff ? 'lights off' : 'lights on';
       pushMessage({ from:'tank', text: eventText, channel:'event' });
-      const msg = await guppyReply(trigger, needsRef.current);
+      const msg = await guppyReply(trigger, needsRef.current, getPromptContext({ lightsOff: nextLightsOff }));
       showSpeech(msg);
       pushMessage({ from:'guppy', text: msg, channel:'event' });
     } finally {
@@ -906,10 +1176,13 @@ function App() {
     setThinking(true);
     busyRef.current = true;
     try {
-      const reply = await guppyReply(text, needsRef.current);
+      const reply = await guppyReply(text, needsRef.current, getPromptContext());
       showSpeech(reply);
       pushMessage({ from:'guppy', text: reply, channel:'chat' });
-      setHappiness(hp => Math.min(100, hp + 4));
+      updateNeeds(current => ({
+        ...current,
+        happiness: clamp(current.happiness + 4, 0, 100),
+      }));
     } finally {
       setThinking(false);
       busyRef.current = false;
@@ -923,7 +1196,7 @@ function App() {
       ? (fishDir > 0 ? FISH_EAT_R  : FISH_EAT_L)
       : (fishDir > 0 ? FR[frame]   : FL[frame]);
 
-  const fishY = sleeping ? 60 : 42;
+  const fishY = sleeping ? 60 : behaviorMode === 'food' ? 28 : 42;
 
   const ph  = tw.phosphorColor;
   const bg  = tw.bgColor;
@@ -1007,6 +1280,7 @@ function App() {
             bubbles={bubbles}
             weedPhase={weedPhase}
             sleeping={sleeping}
+            lightsOff={lightsOff}
             guppySpeech={speech}
             bgColor={bg}
           />
@@ -1066,7 +1340,7 @@ function App() {
             {[
               { label:'feed guppy',   action: feed,         hot: hunger < 35,    icon:'🐟' },
               { label:'tap the glass', action: tap,          hot: happiness < 35, icon:'👁' },
-              { label: sleeping ? 'turn lights on' : 'lights off', action: toggleLight, hot: energy < 25, icon: sleeping ? '☀' : '🌙' },
+              { label: lightsOff ? 'lights on' : 'lights off', action: toggleLight, hot: energy < 25, icon: lightsOff ? '☀' : '🌙' },
             ].map(({ label, action, hot }) => (
               <div
                 key={label}
