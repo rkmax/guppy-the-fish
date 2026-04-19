@@ -81,7 +81,7 @@ function pick(arr) {
 
 function templateResponse(text, needs = {}) {
   const t = (text || '').toLowerCase();
-  if ((needs.hunger || 100) < 30) return pick(T.food);
+  if ((needs.hunger ?? 100) < 30) return pick(T.food);
   if (/\b(hi|hello|hey|hola)\b/.test(t)) return pick(T.greet);
   if (/\b(food|eat|hungry|feed|meal)\b/.test(t)) return pick(T.food);
   if (/\bbubble/.test(t)) return pick(T.bubble);
